@@ -518,9 +518,6 @@ input[type=range]::-webkit-slider-thumb:hover  { transform: scale(1.25); }
       <button id="muse-scan-btn" onclick="scanMuse()">&#x1F50D; Scan Devices</button>
     </div>
     <div class="muse-device-list" id="muse-device-list"></div>
-    <div class="muse-hint" style="margin-top:8px">
-      Turn on Muse 2 → hold the button until the LED blinks blue, then click <strong>Scan Devices</strong>.
-    </div>
   </div>
 
   <!-- EEG Channel Quality Diagram -->
@@ -668,10 +665,19 @@ function scanMuse() {
   socket.emit('muse_scan');
 }
 
+let _connectTimeout = null;
+
 function connectDevice(name, address) {
   socket.emit('muse_connect', { address: address });
   setMuseUI('connecting', 'Connecting to ' + name + '...');
   document.getElementById('muse-device-list').innerHTML = '';
+  // Safety timeout: if no status update in 45 s, reset UI so user can retry
+  clearTimeout(_connectTimeout);
+  _connectTimeout = setTimeout(() => {
+    if (!museConnected) {
+      setMuseUI('error', '❌ Connection timeout — retry?');
+    }
+  }, 45000);
 }
 
 function setMuseUI(status, text) {
@@ -733,6 +739,7 @@ socket.on('muse_scan_result', (d) => {
 });
 
 socket.on('muse_status', (d) => {
+  clearTimeout(_connectTimeout);
   if (d.status === 'disconnected' || d.status === 'error') {
     museDisconnecting = false;
   }
