@@ -39,11 +39,20 @@ from music_engine import MusicEngine, find_or_download_soundfont
 from flask import Flask, render_template
 from flask_socketio import SocketIO
 
+try:
+    from brainflow_connector import MuseConnector, BRAINFLOW_AVAILABLE, scan_muse_devices, BLEAK_AVAILABLE
+except Exception:
+    BRAINFLOW_AVAILABLE = False
+    BLEAK_AVAILABLE = False
+    MuseConnector = None
+    def scan_muse_devices(timeout=5.0): return []
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "eeg-engine-2026"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 engine: MusicEngine = None
+muse:   "MuseConnector" = None  # type: ignore
 
 PRESETS = {
     "relax":  (0.70, 0.20, 0.10),
@@ -93,6 +102,43 @@ def on_set_preset(data):
         })
 
 
+@socketio.on("muse_connect")
+def on_muse_connect(data):
+    global muse
+    if not BRAINFLOW_AVAILABLE or muse is None:
+        socketio.emit("muse_status", {
+            "status": "error",
+            "error":  "brainflow tidak terinstall. Jalankan: pip3 install brainflow"
+        })
+        return
+    mac = (data.get("address") or "").strip()
+    muse.connect(mac)
+
+
+@socketio.on("muse_disconnect")
+def on_muse_disconnect():
+    global muse
+    if muse:
+        muse.disconnect()
+
+
+@socketio.on("muse_scan")
+def on_muse_scan():
+    """Scan BLE devices dan emit hasilnya ke browser."""
+    if not BLEAK_AVAILABLE:
+        socketio.emit("muse_scan_result", {
+            "devices": [],
+            "error": "bleak tidak terinstall. Jalankan: pip3 install bleak"
+        })
+        return
+    socketio.emit("muse_scan_result", {"devices": [], "scanning": True})
+    devices = scan_muse_devices(timeout=5.0)
+    socketio.emit("muse_scan_result", {
+        "devices": [{"name": n, "address": a} for n, a in devices],
+        "scanning": False
+    })
+
+
 # ── background updater ────────────────────────────────────────────────────────
 
 def _background_updater():
@@ -109,6 +155,9 @@ def _background_updater():
                     "alpha": round(eeg.alpha, 3),
                     "beta":  round(eeg.beta,  3),
                     "theta": round(eeg.theta, 3),
+                    "muse":  muse.status if muse else "unavailable",
+                    "heart_rate": muse.heart_rate if muse else None,
+                    "channel_quality": muse.channel_quality if muse else None,
                 }
             socketio.emit("state_update", payload)
         socketio.sleep(0.1)
@@ -117,7 +166,7 @@ def _background_updater():
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    global engine
+    global engine, muse
 
     _kill_existing()
 
@@ -128,6 +177,16 @@ def main():
     print("    Inisialisasi FluidSynth...")
     engine = MusicEngine(sf_path)
     engine.start()
+
+    # Inisialisasi Muse connector (jika brainflow terinstall)
+    if BRAINFLOW_AVAILABLE and MuseConnector:
+        def _muse_status_cb(status: str, error: str):
+            socketio.emit("muse_status", {"status": status, "error": error})
+        muse = MuseConnector(engine, on_status=_muse_status_cb)
+        print("✅  BrainFlow siap. Tekan 'Hubungkan Muse 2' di browser.")
+    else:
+        print("⚠️   brainflow tidak terinstall — koneksi Muse 2 tidak tersedia.")
+        print("     Jalankan: pip3 install brainflow")
 
     socketio.start_background_task(_background_updater)
 

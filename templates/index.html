@@ -279,6 +279,116 @@ input[type=range]::-webkit-slider-thumb:hover  { transform: scale(1.25); }
 }
 #conn-status.ok  { color: #4ade80; }
 #conn-status.err { color: #f87171; }
+
+/* ── Muse 2 panel ────────────────────────────────────── */
+.muse-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin: 8px 0;
+}
+.muse-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 0.82rem;
+}
+.muse-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--dim);
+    flex-shrink: 0;
+    transition: background 0.3s;
+}
+.muse-dot.connected  { background: #4ade80; }
+.muse-dot.connecting { background: #fbbf24; animation: blink 0.9s infinite; }
+.muse-dot.error      { background: #f87171; }
+.muse-input-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+#muse-btn, #muse-scan-btn {
+    border-radius: 7px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 8px 16px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+    font-family: inherit;
+    border: 1px solid;
+}
+#muse-btn {
+    background: #1a2e20;
+    border-color: #4ade80;
+    color: #4ade80;
+    flex: 1;
+}
+#muse-btn:hover { background: #243a2a; }
+#muse-btn.disconnecting {
+    border-color: #f87171;
+    color: #f87171;
+    background: #2e1a1a;
+}
+#muse-scan-btn {
+    background: var(--accent);
+    border-color: var(--border);
+    color: var(--dim);
+}
+#muse-scan-btn:hover { border-color: var(--text); color: var(--text); }
+#muse-scan-btn:disabled { opacity: 0.4; cursor: default; }
+.muse-device-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+.muse-device-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 7px 12px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+.muse-device-item:hover { border-color: #4ade80; }
+.muse-device-name { color: var(--text); font-weight: 600; }
+.muse-device-addr { color: var(--dim); font-family: monospace; font-size: 0.72rem; }
+.muse-hint {
+    font-size: 0.72rem;
+    color: var(--dim);
+    line-height: 1.55;
+}
+
+/* ── EEG Head Diagram ───────────────────────────────── */
+.head-diagram-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 0 4px;
+}
+.head-diagram-wrap svg { overflow: visible; }
+.head-legend {
+    display: flex;
+    gap: 14px;
+    font-size: 0.68rem;
+    color: var(--dim);
+    justify-content: center;
+}
+.head-legend span { display: flex; align-items: center; gap: 4px; }
+.head-legend i {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+}
 </style>
 </head>
 
@@ -302,13 +412,17 @@ input[type=range]::-webkit-slider-thumb:hover  { transform: scale(1.25); }
   <div class="state-card">
     <div class="state-row">
       <div id="state-badge">RELAX</div>
-      <div id="state-desc">Rileks / Flow State</div>
+      <div id="state-desc">Relaxed / Flow State</div>
     </div>
 
     <div class="metrics-row">
       <div>
         <span class="metric-label">BPM</span>
         <span class="metric-value" id="bpm-val">72.0</span>
+      </div>
+      <div>
+        <span class="metric-label">HR</span>
+        <span class="metric-value" id="hr-val" style="color:#fb7185">—</span>
       </div>
       <div>
         <span class="metric-label">BUILD</span>
@@ -384,16 +498,65 @@ input[type=range]::-webkit-slider-thumb:hover  { transform: scale(1.25); }
   <!-- Presets -->
   <div class="section-title">PRESET</div>
   <div class="preset-grid">
-    <button class="preset-btn relax"  onclick="setPreset('relax')">Rileks</button>
-    <button class="preset-btn focus"  onclick="setPreset('focus')">Fokus</button>
-    <button class="preset-btn stress" onclick="setPreset('stress')">Stres</button>
-    <button class="preset-btn drowsy" onclick="setPreset('drowsy')">Kantuk</button>
+    <button class="preset-btn relax"  onclick="setPreset('relax')">Relax</button>
+    <button class="preset-btn focus"  onclick="setPreset('focus')">Focus</button>
+    <button class="preset-btn stress" onclick="setPreset('stress')">Stress</button>
+    <button class="preset-btn drowsy" onclick="setPreset('drowsy')">Drowsy</button>
   </div>
 
-  <!-- Footer / note -->
-  <div class="footer">
-    ⚠️&nbsp; Mode manual — slider mengontrol nilai EEG secara langsung.<br>
-    Saat Muse 2 terhubung via BrainFlow, ganti <code>set_eeg</code> dengan nilai band power realtime.
+  <div class="divider"></div>
+
+  <!-- Muse 2 Connection -->
+  <div class="section-title">BCI Device</div>
+  <div class="muse-panel">
+    <div class="muse-status-row">
+      <span class="muse-dot" id="muse-dot"></span>
+      <span id="muse-status-text" style="color:var(--dim)">Not connected</span>
+    </div>
+    <div class="muse-input-row">
+      <button id="muse-btn" onclick="toggleMuse()" class="disconnecting" style="display:none">Disconnect</button>
+      <button id="muse-scan-btn" onclick="scanMuse()">&#x1F50D; Scan Devices</button>
+    </div>
+    <div class="muse-device-list" id="muse-device-list"></div>
+    <div class="muse-hint" style="margin-top:8px">
+      Turn on Muse 2 → hold the button until the LED blinks blue, then click <strong>Scan Devices</strong>.
+    </div>
+  </div>
+
+  <!-- EEG Channel Quality Diagram -->
+  <div class="section-title" style="margin-top:18px">SIGNAL QUALITY</div>
+  <div class="head-diagram-wrap">
+    <svg viewBox="0 0 200 210" width="180" height="189">
+      <!-- Head outline -->
+      <circle cx="100" cy="112" r="82" fill="none" stroke="#2a2a4a" stroke-width="1.5"/>
+      <!-- Nose notch (front = top) -->
+      <path d="M93,31 L100,22 L107,31" fill="none" stroke="#2a2a4a" stroke-width="1.5" stroke-linejoin="round"/>
+      <!-- Ear bumps -->
+      <path d="M18,112 Q10,112 10,106 Q10,100 18,100" fill="none" stroke="#2a2a4a" stroke-width="1.2"/>
+      <path d="M182,112 Q190,112 190,106 Q190,100 182,100" fill="none" stroke="#2a2a4a" stroke-width="1.2"/>
+
+      <!-- Electrode: AF7 (left frontal) -->
+      <circle id="eq-AF7" cx="64" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+      <text x="64" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF7</text>
+
+      <!-- Electrode: AF8 (right frontal) -->
+      <circle id="eq-AF8" cx="136" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+      <text x="136" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF8</text>
+
+      <!-- Electrode: TP9 (left temporal) -->
+      <circle id="eq-TP9" cx="21" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+      <text x="21" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP9</text>
+
+      <!-- Electrode: TP10 (right temporal) -->
+      <circle id="eq-TP10" cx="179" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+      <text x="179" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP10</text>
+    </svg>
+    <div class="head-legend">
+      <span><i style="background:#4ade80"></i>Good</span>
+      <span><i style="background:#fbbf24"></i>Weak</span>
+      <span><i style="background:#f87171"></i>Poor</span>
+      <span><i style="background:#3f3f46"></i>Inactive</span>
+    </div>
   </div>
 
 </div><!-- /container -->
@@ -407,10 +570,10 @@ const STATE_COLORS = {
   drowsy: '#fbbf24',
 };
 const STATE_DESC = {
-  focus:  'Fokus / Konsentrasi',
-  relax:  'Rileks / Flow State',
-  stress: 'Stres / Frustrasi',
-  drowsy: 'Kantuk / Bosan',
+  focus:  'Focus / Concentration',
+  relax:  'Relaxed / Flow State',
+  stress: 'Stress / Frustration',
+  drowsy: 'Drowsy / Bored',
 };
 
 // ── Socket.IO ──────────────────────────────────────────────────────────────
@@ -439,6 +602,7 @@ socket.on('state_update', (d) => {
 
   // Metrics
   document.getElementById('bpm-val').textContent = d.bpm.toFixed(1);
+  document.getElementById('hr-val').textContent  = d.heart_rate ? d.heart_rate + ' bpm' : '—';
   document.getElementById('build-val-text').textContent = d.build.toFixed(2);
   document.getElementById('build-bar').style.width = (d.build * 100) + '%';
   document.getElementById('build-pct').textContent = Math.round(d.build * 100) + '%';
@@ -447,6 +611,14 @@ socket.on('state_update', (d) => {
   setBar('alpha', d.alpha);
   setBar('beta',  d.beta);
   setBar('theta', d.theta);
+
+  // Sync muse dot jika halaman di-refresh saat sudah terhubung
+  if (d.muse === 'connected' && !museConnected && !museDisconnecting) {
+    setMuseUI('connected', '✅ Muse 2 connected');
+  }
+
+  // EEG channel quality diagram
+  updateHeadDiagram(d.channel_quality, d.muse === 'connected');
 });
 
 socket.on('preset_applied', (d) => {
@@ -454,6 +626,124 @@ socket.on('preset_applied', (d) => {
   ['alpha', 'beta', 'theta'].forEach(ch => {
     document.getElementById(ch + '-slider').value = d[ch];
   });
+});
+
+// ── EEG Head Diagram ──────────────────────────────────────────────────────
+function updateHeadDiagram(quality, connected) {
+  const channels = ['AF7', 'AF8', 'TP9', 'TP10'];
+  channels.forEach(name => {
+    const el = document.getElementById('eq-' + name);
+    if (!el) return;
+    if (!connected || quality === null) {
+      el.setAttribute('fill', '#3f3f46');
+      return;
+    }
+    const q = quality[name] ?? 0;
+    let color;
+    if (q >= 0.7)      color = '#4ade80';  // baik
+    else if (q >= 0.35) color = '#fbbf24';  // lemah
+    else                color = '#f87171';  // buruk
+    el.setAttribute('fill', color);
+  });
+}
+
+// ── Muse 2 ────────────────────────────────────────────────────────────────
+let museConnected     = false;
+let museDisconnecting = false;
+
+function toggleMuse() {
+  // Only called when connected (Disconnect button)
+  if (!museConnected) return;
+  museDisconnecting = true;
+  socket.emit('muse_disconnect');
+  setMuseUI('disconnected', 'Not connected');
+}
+
+function scanMuse() {
+  const scanBtn = document.getElementById('muse-scan-btn');
+  scanBtn.disabled = true;
+  scanBtn.textContent = 'Scanning...';
+  document.getElementById('muse-device-list').innerHTML =
+    '<div style="font-size:0.75rem;color:var(--dim);padding:4px 2px">Scanning for BLE devices... (~5 sec)</div>';
+  socket.emit('muse_scan');
+}
+
+function connectDevice(name, address) {
+  socket.emit('muse_connect', { address: address });
+  setMuseUI('connecting', 'Connecting to ' + name + '...');
+  document.getElementById('muse-device-list').innerHTML = '';
+}
+
+function setMuseUI(status, text) {
+  document.getElementById('muse-dot').className = 'muse-dot ' + status;
+  document.getElementById('muse-status-text').textContent = text;
+  museConnected = (status === 'connected');
+
+  const connectBtn = document.getElementById('muse-btn');
+  const scanBtn    = document.getElementById('muse-scan-btn');
+
+  if (status === 'connected') {
+    connectBtn.style.display = '';
+    scanBtn.style.display    = 'none';
+  } else if (status === 'connecting') {
+    connectBtn.style.display = 'none';
+    scanBtn.style.display    = '';
+    scanBtn.disabled         = true;
+    scanBtn.textContent      = '⏳ Connecting...';
+  } else {
+    // disconnected / error / unavailable
+    connectBtn.style.display = 'none';
+    scanBtn.style.display    = '';
+    scanBtn.disabled         = false;
+    scanBtn.textContent      = '\uD83D\uDD0D Scan Devices';
+    if (status === 'disconnected') {
+      document.getElementById('muse-device-list').innerHTML = '';
+    }
+  }
+
+  document.querySelectorAll('input[type=range]').forEach(s => {
+    s.disabled      = museConnected;
+    s.style.opacity = museConnected ? '0.35' : '1';
+  });
+}
+
+socket.on('muse_scan_result', (d) => {
+  const scanBtn = document.getElementById('muse-scan-btn');
+  const list    = document.getElementById('muse-device-list');
+
+  if (d.scanning) return;  // intermediate "searching" state
+
+  scanBtn.disabled = false;
+  scanBtn.textContent = '\uD83D\uDD0D Scan';
+
+  if (d.error) {
+    list.innerHTML = `<div style="font-size:0.75rem;color:#f87171;padding:4px 2px">${d.error}</div>`;
+    return;
+  }
+  if (!d.devices || d.devices.length === 0) {
+    list.innerHTML = '<div style="font-size:0.75rem;color:var(--dim);padding:4px 2px">No Muse devices found. Make sure Muse is powered on.</div>';
+    return;
+  }
+  list.innerHTML = d.devices.map(dev =>
+    `<div class="muse-device-item" onclick="connectDevice('${dev.name}','${dev.address}')">
+       <span class="muse-device-name">${dev.name}</span>
+       <span class="muse-device-addr">${dev.address}</span>
+     </div>`
+  ).join('');
+});
+
+socket.on('muse_status', (d) => {
+  if (d.status === 'disconnected' || d.status === 'error') {
+    museDisconnecting = false;
+  }
+  const msgs = {
+    connected:    '✅ Muse 2 connected',
+    connecting:   'Connecting...',
+    disconnected: 'Not connected',
+    error:        '❌ ' + (d.error || 'Connection failed'),
+    unavailable:  'brainflow not installed',
+  };
+  setMuseUI(d.status, msgs[d.status] || d.status);
 });
 
 function setBar(name, val) {
