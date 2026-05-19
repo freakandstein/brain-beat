@@ -4,13 +4,15 @@
 
 | Komponen | Status | Keterangan |
 |---|---|---|
-| **music_engine.py** | ✅ Selesai | Generative music via FluidSynth, 4 state |
-| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, auto-kill |
-| **Web UI (index.html)** | ✅ Selesai | OBS overlay, realtime state + BPM + sliders |
-| **State detection** | ✅ Selesai | Threshold-based (band power rules) |
-| **BrainFlow integration** | 🔲 Belum | Masih pakai nilai manual / preset |
-| **ML Classifier** | 🔲 Belum | Threshold cukup untuk tahap awal |
-| **Muse 2 device** | 🔲 Belum tiba | Dataset simulasi bisa digunakan dulu |
+| **music_engine.py** | ✅ Selesai | Generative music via FluidSynth, 4 state, state vote smoothing, build + stress build |
+| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit δ/θ/α/β normalized + raw µV² |
+| **Web UI (index.html)** | ✅ Selesai | OBS overlay — Canvas waveforms δ/θ/α/β realtime (µV²), EEG Channel Map, HR, socket live-dot |
+| **State detection** | ✅ Selesai | Threshold-based + vote buffer 2 detik (anti-flicker) |
+| **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
+| **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
+| **Channel quality filter** | ✅ Selesai | Channel poor di-skip dari band power computation |
+| **Delta band** | ✅ Selesai | δ 0.5–4 Hz ditambah di semua layer (connector/engine/server/UI) |
+| **ML Classifier** | 🔲 Belum | Threshold cukup untuk tahap awal, upgrade SVM/LDA nanti |
 
 ---
 
@@ -27,7 +29,7 @@
 | **Tipe Elektroda** | Dry electrode (tanpa gel) |
 | **Sensor tambahan** | PPG (heart rate), accelerometer, gyroscope |
 | **Konektivitas** | Bluetooth Low Energy |
-| **Akses Raw EEG** | ✅ Via BrainFlow (direkomendasikan) atau MuseLSL |
+| **Akses Raw EEG** | ✅ Via muselsl (subprocess) + pylsl (LSL inlet) |
 
 ### Lokasi Elektroda
 
@@ -63,43 +65,59 @@ Pendekatan ini dipilih karena:
 
 ### Mental State yang Dideteksi
 
-| State | Sinyal EEG | Channel Utama | Threshold (implementasi saat ini) |
-|---|---|---|---|
-| **Fokus/Konsentrasi** | Beta tinggi (13–30Hz) | AF7/AF8 | beta > 0.6 AND alpha < 0.35 |
-| **Rileks/Flow State** | Alpha tinggi (8–13Hz) | TP9/TP10 | alpha > 0.55 AND beta < 0.4 |
-| **Stres/Frustrasi** | Theta + Beta tinggi | AF7/AF8 | beta > 0.65 AND theta > 0.55 |
-| **Kantuk/Bosan** | Theta dominan (4–8Hz) | Semua channel | theta > 0.65 |
+| State | Sinyal EEG | Channel Utama | Threshold Detection | Fallback |
+|---|---|---|---|---|
+| **Stres/Frustrasi** | Beta + Theta tinggi | AF7/AF8 | beta > 0.70 AND theta > 0.62 | (prioritas pertama) |
+| **Fokus/Konsentrasi** | Beta moderat, Alpha rendah | AF7/AF8 | beta > 0.52 AND alpha < 0.45 | beta > 0.40 |
+| **Rileks/Flow State** | Alpha tinggi (8–13Hz) | TP9/TP10 | alpha > 0.55 AND beta < 0.4 | — |
+| **Kantuk/Bosan** | Theta dominan (4–8Hz) + Delta | Semua channel | theta > 0.65 | — |
 
-> Deteksi saat ini menggunakan **threshold rules** pada nilai band power yang dinormalisasi (0–1).
-> Upgrade ke ML classifier (SVM/LDA) direncanakan setelah data dari Muse 2 terkumpul.
+> Nilai alpha/beta/theta/delta adalah **normalized 0–1** menggunakan rolling percentile (p10–p90, window 60 sampel).
+> Raw band power dalam **µV²** juga dikirim ke UI secara terpisah untuk display waveform.
+> Channel dengan signal quality < 0.25 **dikecualikan** dari band power computation.
+
+### State Smoothing (Anti-Flicker)
+
+Nilai EEG mentah berfluktuasi setiap 16th note tick (~8x/detik di 120 BPM). Tanpa smoothing, state bisa loncat-loncat meski kondisi otak masih sama.
+
+**Mekanisme**: vote buffer 16 tick (~2 detik) — state aktif = **mayoritas** dari 16 tick terakhir.
+
+| Parameter | Nilai | Efek |
+|---|---|---|
+| Vote buffer size | 16 tick | ~2 detik di 120 BPM |
+| Minimum hold time | Implisit: butuh >8 tick baru berubah | State tidak bisa flip dalam <1 detik |
+| Implementasi | `Counter(deque(maxlen=16)).most_common(1)` | O(1) per tick |
 
 ### Pipeline Overlay Stream
 
 ```
-Muse 2 (Bluetooth)            ← [🔲 Belum] Device belum tiba
+Muse 2 (Bluetooth)
     ↓
-BrainFlow (Python)            ← [🔲 Belum] Akuisisi data realtime
+muselsl subprocess            ← [✅ Impl.] Stream EEG + PPG via LSL
     ↓
-MNE-Python / SciPy            ← [🔲 Belum] Preprocessing & filtering
+pylsl StreamInlet             ← [✅ Impl.] Baca EEG 256Hz + PPG 64Hz
     ↓
-Band Power Extraction          ← [🔲 Belum] Hitung power alpha/beta/theta
+BrainFlow DataFilter          ← [✅ Impl.] PSD Welch, band power (filter only)
     ↓
-Mental State Classifier        ← [✅ Impl.] Threshold rules di music_engine.py
-    ↓                                       (ML upgrade nanti jika diperlukan)
-Generative Music Engine        ← [✅ Impl.] FluidSynth + MIDI per state
-(music_engine.py)                           4 state: fokus/rileks/stres/kantuk
+Channel Quality Filter        ← [✅ Impl.] Skip channel quality < 0.25
     ↓
-WebSocket Server               ← [✅ Impl.] Flask-SocketIO, port 8765
-(music_server.py)
+Band Power δ/θ/α/β            ← [✅ Impl.] 0.5–4 / 4–8 / 8–13 / 13–30 Hz
     ↓
-HTML/CSS/JS Overlay            ← [✅ Impl.] State badge, BPM, sliders, preset
-(templates/index.html)
+Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.35
+    ↓                                     Juga track raw µV² untuk display UI
+Mental State Classifier       ← [✅ Impl.] Threshold rules + vote buffer 2s
     ↓
-OBS Browser Source             ← Ditampilkan di stream
+Generative Music Engine       ← [✅ Impl.] FluidSynth + MIDI per state
+(music_engine.py)                          4 state + focus build + stress build
+    ↓
+WebSocket Server              ← [✅ Impl.] Flask-SocketIO, port 8765
+(music_server.py)                          payload: state, BPM, build, δ/θ/α/β
+    ↓                                      normalized + raw µV², HR, channel quality
+HTML/CSS/JS Overlay           ← [✅ Impl.] Canvas waveforms δ/θ/α/β (µV²),
+(templates/index.html)                     EEG Channel Map SVG, socket live-dot
+    ↓
+OBS Browser Source            ← Ditampilkan di stream
 ```
-
-> **Saat ini:** Nilai alpha/beta/theta diinput manual via slider/preset di Web UI.
-> Saat Muse 2 tiba, ganti dengan BrainFlow loop yang memanggil `engine.set_eeg()`.
 
 ### Kenapa HTML Browser Source (bukan aplikasi desktop)?
 - Background transparan native — tidak perlu crop manual di OBS

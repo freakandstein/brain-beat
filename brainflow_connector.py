@@ -14,6 +14,8 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
+import os
 from typing import Callable, Optional
 
 import numpy as np
@@ -103,14 +105,17 @@ class MuseConnector:
         self.error_msg          = ""
         self.heart_rate: Optional[float] = None
         self.channel_quality: dict = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
+        self.raw_bands: dict = {"delta": 0.0, "alpha": 0.0, "beta": 0.0, "theta": 0.0}
 
         # Internal
         self.running       = False
         self._loop_tick    = 0
-        self._history      = {"alpha": [], "beta": [], "theta": []}
+        self._history      = {"delta": [], "alpha": [], "beta": [], "theta": []}
         self._HIST_LEN     = 60
         self._stream_proc: Optional[subprocess.Popen] = None
         self._cancel       = threading.Event()
+        self._mac_address  = ""        # stored for auto-reconnect
+        self._err_file     = None      # temp file capturing muselsl stderr
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -129,10 +134,11 @@ class MuseConnector:
         self.running = False
         self._cancel.set()
         self._kill_proc()
-        self._history    = {"alpha": [], "beta": [], "theta": []}
+        self._history    = {"delta": [], "alpha": [], "beta": [], "theta": []}
         self.heart_rate  = None
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
+        self.raw_bands   = {"delta": 0.0, "alpha": 0.0, "beta": 0.0, "theta": 0.0}
         self._set_status("disconnected")
         print("■  Muse 2 disconnected.")
 
@@ -160,59 +166,10 @@ class MuseConnector:
                 pass
 
     def _connect_thread(self, mac_address: str) -> None:
+        self._mac_address = mac_address
         self._kill_proc()
         try:
-            if not mac_address:
-                raise Exception("No device address — scan first and select a device")
-
-            print(f"🔵  Starting muselsl for {mac_address}...")
-
-            # muselsl runs as a subprocess; it holds the BLE connection
-            # and publishes EEG + PPG as LSL outlets
-            script = (
-                "from muselsl import stream; "
-                f"stream(address='{mac_address}', ppg_enabled=True, "
-                "acc_enabled=False, gyro_enabled=False)"
-            )
-            self._stream_proc = subprocess.Popen(
-                [sys.executable, "-c", script],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-            # Poll until the EEG LSL stream appears (up to 25 s)
-            print("⏳  Waiting for Muse 2 LSL streams...")
-            eeg_streams = None
-            for _ in range(25):
-                if self._cancel.is_set():
-                    raise Exception("Cancelled by user")
-                if self._stream_proc.poll() is not None:
-                    raise Exception(
-                        "muselsl exited unexpectedly — make sure Muse 2 is on "
-                        "and not connected to another app"
-                    )
-                found = resolve_byprop("type", "EEG", timeout=1.0)
-                if found:
-                    eeg_streams = found
-                    break
-            if not eeg_streams:
-                raise Exception("EEG LSL stream not found — Muse 2 did not connect within 25 s")
-
-            ppg_streams = resolve_byprop("type", "PPG", timeout=3.0)
-
-            eeg_inlet = StreamInlet(eeg_streams[0], max_buflen=5)
-            ppg_inlet = StreamInlet(ppg_streams[0], max_buflen=30) if ppg_streams else None
-
-            if ppg_inlet:
-                print("📡  PPG LSL stream found — HR enabled!")
-            else:
-                print("⚠️  PPG stream not found — HR disabled")
-
-            self.running = True
-            self._set_status("connected")
-            print("✅  Muse 2 connected via muselsl!")
-            self._loop(eeg_inlet, ppg_inlet)
-
+            self._launch_and_loop(mac_address)
         except Exception as e:
             self.running = False
             self._kill_proc()
@@ -220,6 +177,81 @@ class MuseConnector:
             print(f"❌  Connection failed: {e}")
         finally:
             self.running = False
+
+    def _launch_and_loop(self, mac_address: str) -> None:
+        """Launch muselsl subprocess, wait for LSL streams, run _loop. Raises on failure."""
+        if not mac_address:
+            raise Exception("No device address — scan first and select a device")
+
+        print(f"🔵  Starting muselsl for {mac_address}...")
+
+        # Capture muselsl stderr to temp file so we can show why it died
+        self._err_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix="_muselsl.log", delete=False
+        )
+
+        script = (
+            "from muselsl import stream; "
+            f"stream(address='{mac_address}', ppg_enabled=True, "
+            "acc_enabled=False, gyro_enabled=False)"
+        )
+        self._stream_proc = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.DEVNULL,
+            stderr=self._err_file,
+        )
+
+        # Poll until the EEG LSL stream appears (up to 25 s)
+        print("⏳  Waiting for Muse 2 LSL streams...")
+        eeg_streams = None
+        for _ in range(25):
+            if self._cancel.is_set():
+                raise Exception("Cancelled by user")
+            if self._stream_proc.poll() is not None:
+                err = self._read_err_log()
+                raise Exception(
+                    f"muselsl exited unexpectedly (code={self._stream_proc.returncode}) — "
+                    f"make sure Muse 2 is on and not connected to another app"
+                    + (f"\n  muselsl: {err}" if err else "")
+                )
+            found = resolve_byprop("type", "EEG", timeout=1.0)
+            if found:
+                eeg_streams = found
+                break
+        if not eeg_streams:
+            raise Exception("EEG LSL stream not found — Muse 2 did not connect within 25 s")
+
+        ppg_streams = resolve_byprop("type", "PPG", timeout=3.0)
+
+        eeg_inlet = StreamInlet(eeg_streams[0], max_buflen=5)
+        ppg_inlet = StreamInlet(ppg_streams[0], max_buflen=30) if ppg_streams else None
+
+        if ppg_inlet:
+            print("📡  PPG LSL stream found — HR enabled!")
+        else:
+            print("⚠️  PPG stream not found — HR disabled")
+
+        self.running = True
+        self._set_status("connected")
+        print("✅  Muse 2 connected via muselsl!")
+        self._loop(eeg_inlet, ppg_inlet)
+
+    def _read_err_log(self) -> str:
+        """Read and clean up the muselsl stderr temp file."""
+        if self._err_file is None:
+            return ""
+        try:
+            self._err_file.flush()
+            name = self._err_file.name
+            self._err_file.close()
+            self._err_file = None
+            with open(name, "r") as f:
+                content = f.read().strip()
+            os.unlink(name)
+            # Return last 300 chars to avoid wall of text
+            return content[-300:] if content else ""
+        except Exception:
+            return ""
 
     def _loop(self, eeg_inlet, ppg_inlet) -> None:
         EEG_MAX = SAMPLE_RATE * 10  # 10 s circular buffer, 4 ch
@@ -233,13 +265,24 @@ class MuseConnector:
         ppg_ptr   = 0
         ppg_total = 0
 
+        # EMA smoothing — mencegah spike tiba-tiba dari artifact/normalisasi
+        # alpha=0.35: nilai baru berkontribusi 35%, time constant ~3 detik
+        # (cukup responsif untuk tangkap focus nyata, tetap filter artifact)
+        EMA = 0.35
+        ema_d = ema_a = ema_b = ema_t = 0.5       # normalized EMA
+        ema_d_raw = ema_a_raw = ema_b_raw = ema_t_raw = 0.0  # raw uV2 EMA
+
         while self.running:
             time.sleep(1.0)
             self._loop_tick += 1
 
             # Subprocess health check
             if self._stream_proc and self._stream_proc.poll() is not None:
-                print("⚠️  muselsl process exited — disconnecting")
+                err = self._read_err_log()
+                msg = f"muselsl process exited (code={self._stream_proc.returncode})"
+                if err:
+                    msg += f"\n  muselsl: {err}"
+                print(f"⚠️  {msg}")
                 break
 
             # ── Pull EEG ─────────────────────────────────────────────────
@@ -280,32 +323,62 @@ class MuseConnector:
                     e2 = eeg_buf[:, :n - (EEG_MAX - start)]
                     eeg_win = np.concatenate([e1, e2], axis=1)
 
-                # ── Band power ────────────────────────────────────────────
-                alpha_list, beta_list, theta_list = [], [], []
-                for ch in range(4):
-                    ch_data = eeg_win[ch].copy()
-                    DataFilter.detrend(ch_data, DetrendOperations.CONSTANT.value)
-                    psd = DataFilter.get_psd_welch(
-                        ch_data, SAMPLE_RATE, SAMPLE_RATE // 2, SAMPLE_RATE,
-                        WindowOperations.BLACKMAN_HARRIS.value
-                    )
-                    alpha_list.append(DataFilter.get_band_power(psd, 8.0,  13.0))
-                    beta_list.append( DataFilter.get_band_power(psd, 13.0, 30.0))
-                    theta_list.append(DataFilter.get_band_power(psd, 4.0,   8.0))
-
-                alpha = self._normalize("alpha", float(np.mean(alpha_list)))
-                beta  = self._normalize("beta",  float(np.mean(beta_list)))
-                theta = self._normalize("theta", float(np.mean(theta_list)))
-                self.engine.set_eeg(alpha, beta, theta)
-
-                # ── Channel quality ───────────────────────────────────────
+                # ── Channel quality (dihitung DULU sebelum band power) ────
+                ch_quality = []
                 for i, name in enumerate(["TP9", "AF7", "AF8", "TP10"]):
                     std = float(np.std(eeg_win[i]))
                     if std < 3.0 or std > 400.0:  q = 0.0
                     elif std > 150.0:              q = 0.25
                     elif std < 8.0:                q = std / 8.0 * 0.6
                     else:                          q = 1.0
-                    self.channel_quality[name] = round(q, 2)
+                    q = round(q, 2)
+                    self.channel_quality[name] = q
+                    ch_quality.append(q)
+
+                # ── Band power — hanya dari channel yang cukup bagus ──────
+                # Channel dengan quality <= 0.0 (flat/disconnected/sangat noisy)
+                # dikecualikan karena noise broadband membuat semua band tampak tinggi
+                delta_list, alpha_list, beta_list, theta_list = [], [], [], []
+                for ch in range(4):
+                    if ch_quality[ch] < 0.25:
+                        continue  # skip channel poor/disconnected
+                    ch_data = eeg_win[ch].copy()
+                    DataFilter.detrend(ch_data, DetrendOperations.CONSTANT.value)
+                    psd = DataFilter.get_psd_welch(
+                        ch_data, SAMPLE_RATE, SAMPLE_RATE // 2, SAMPLE_RATE,
+                        WindowOperations.BLACKMAN_HARRIS.value
+                    )
+                    delta_list.append(DataFilter.get_band_power(psd, 0.5,  4.0))
+                    alpha_list.append(DataFilter.get_band_power(psd, 8.0,  13.0))
+                    beta_list.append( DataFilter.get_band_power(psd, 13.0, 30.0))
+                    theta_list.append(DataFilter.get_band_power(psd, 4.0,   8.0))
+
+                if not alpha_list:
+                    continue  # semua channel poor — skip update, jangan kirim nilai palsu
+
+                delta = self._normalize("delta", float(np.mean(delta_list)))
+                alpha = self._normalize("alpha", float(np.mean(alpha_list)))
+                beta  = self._normalize("beta",  float(np.mean(beta_list)))
+                theta = self._normalize("theta", float(np.mean(theta_list)))
+
+                # EMA smoothing — blends spike sebelum dikirim ke engine
+                ema_d = ema_d * (1 - EMA) + delta * EMA
+                ema_a = ema_a * (1 - EMA) + alpha * EMA
+                ema_b = ema_b * (1 - EMA) + beta  * EMA
+                ema_t = ema_t * (1 - EMA) + theta * EMA
+                self.engine.set_eeg(ema_a, ema_b, ema_t, ema_d)
+
+                # Raw uV2 EMA — untuk display UI
+                ema_d_raw = ema_d_raw*(1-EMA) + float(np.mean(delta_list))*EMA
+                ema_a_raw = ema_a_raw*(1-EMA) + float(np.mean(alpha_list))*EMA
+                ema_b_raw = ema_b_raw*(1-EMA) + float(np.mean(beta_list)) *EMA
+                ema_t_raw = ema_t_raw*(1-EMA) + float(np.mean(theta_list))*EMA
+                self.raw_bands = {
+                    "delta": round(ema_d_raw, 2),
+                    "alpha": round(ema_a_raw, 2),
+                    "beta":  round(ema_b_raw, 2),
+                    "theta": round(ema_t_raw, 2),
+                }
 
                 # ── HR from PPG every 5 s ─────────────────────────────────
                 if ppg_inlet and self._loop_tick % 5 == 0 and ppg_total >= PPG_SR * 4:
@@ -327,14 +400,16 @@ class MuseConnector:
                     "relax"
                 )
                 hr_str = f"  ♥={self.heart_rate:.0f}" if self.heart_rate else ""
-                print(f"  EEG  α={alpha:.2f}  β={beta:.2f}  θ={theta:.2f}  → {state_hint}{hr_str}")
+                print(f"  EEG  α={ema_a:.2f}  β={ema_b:.2f}  θ={ema_t:.2f}  → {state_hint}{hr_str}")
 
             except Exception as e:
                 if self.running:
                     print(f"⚠️  Loop error: {e}")
 
         # Loop ended — clean up
-        self.running = False
+        err = self._read_err_log()
+        if err:
+            print(f"  muselsl last output: {err}")
         self._kill_proc()
         if self.status == "connected":
             self._set_status("disconnected")

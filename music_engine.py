@@ -30,6 +30,7 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
+from collections import deque, Counter
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
@@ -297,20 +298,25 @@ FOCUS_CLIMAX_PHRASE = [
 
 @dataclass
 class EEGState:
+    delta: float = 0.4   # 0–1, tidur dalam / drowsy
     alpha: float = 0.5   # 0–1, rileks/flow
     beta:  float = 0.3   # 0–1, fokus/stres
     theta: float = 0.2   # 0–1, kantuk/meditasi
 
     def mental_state(self) -> str:
         b, a, t = self.beta, self.alpha, self.theta
-        if b > 0.65 and t > 0.55:  return "stress"
-        if b > 0.6  and a < 0.35:  return "focus"
+        # Stress: butuh beta DAN theta tinggi — jangan mudah trigger saat focus
+        if b > 0.70 and t > 0.62:  return "stress"
+        # Focus: beta moderat-tinggi, alpha tidak dominan
+        if b > 0.52 and a < 0.45:  return "focus"
         if a > 0.55 and b < 0.4:   return "relax"
         if t > 0.65:                return "drowsy"
-        if b > 0.45:                return "focus"
+        # Fallback: beta di atas rata-rata → masih lebih focus dari relax
+        if b > 0.40:                return "focus"
         return "relax"
 
     def clamp(self):
+        self.delta = max(0.0, min(1.0, self.delta))
         self.alpha = max(0.0, min(1.0, self.alpha))
         self.beta  = max(0.0, min(1.0, self.beta))
         self.theta = max(0.0, min(1.0, self.theta))
@@ -338,8 +344,10 @@ class MusicEngine:
         self._chord_idx = 0
         self._ost_step  = 0
         self._drum_step = 0
-        self._build_level = 0.0      # fokus tension build (0→1)
+        self._build_level  = 0.0      # fokus tension build (0→1)
+        self._stress_build = 0.0      # stress escalation build (0→1)
         self._prev_state  = None
+        self._state_votes  = deque(maxlen=16)  # vote buffer ~2s @120BPM (8 tick/s)
         self._glitch_cooldown = 0
 
         # Timing
@@ -372,9 +380,10 @@ class MusicEngine:
 
     # ── public API ─────────────────────────────────────────────────────────
 
-    def set_eeg(self, alpha: float, beta: float, theta: float):
+    def set_eeg(self, alpha: float, beta: float, theta: float, delta: float = 0.4):
         """Update nilai EEG. Ini yang nanti dipanggil dari BrainFlow."""
         with self._lock:
+            self.eeg.delta = delta
             self.eeg.alpha = alpha
             self.eeg.beta  = beta
             self.eeg.theta = theta
@@ -406,7 +415,12 @@ class MusicEngine:
                         theta=self.eeg.theta
                     )
 
-                state = eeg.mental_state()
+                # ── State smoothing: vote buffer mencegah loncat-loncat ──
+                # raw_state dihitung dari nilai EEG sesaat, bisa flicker.
+                # state (smooth) = mayoritas dari 16 tick terakhir (~2 detik).
+                raw_state = eeg.mental_state()
+                self._state_votes.append(raw_state)
+                state = Counter(self._state_votes).most_common(1)[0][0]
                 self._update_build_level(state)
                 self._update_bpm(state, eeg)
                 self._update_mixing(state, eeg)
@@ -476,17 +490,18 @@ class MusicEngine:
         if state == "stress":
             step = t % 16
             intensity = min(1.0, eeg.beta * 0.7 + eeg.theta * 0.3)
+            build_boost = int(self._stress_build * 18)
             if STRESS_KICK_PATTERN[step]:
-                vel = int(90 + intensity * 25)
+                vel = min(127, int(90 + intensity * 25) + build_boost)
                 self.fs.noteon(CH["drums"], 36, vel)
                 threading.Timer(0.05, lambda: self.fs.noteoff(CH["drums"], 36)).start()
             if STRESS_SNARE_PATTERN[step]:
-                vel = int(75 + intensity * 30)
+                vel = min(127, int(75 + intensity * 30) + build_boost)
                 self.fs.noteon(CH["drums"], 38, vel)
                 threading.Timer(0.06, lambda: self.fs.noteoff(CH["drums"], 38)).start()
             if STRESS_HIHAT_PATTERN[step]:
                 # Hihat 16th relentless, velocity sedikit variatif
-                vel = int(50 + intensity * 20) + (15 if step % 4 == 0 else 0)
+                vel = min(127, int(50 + intensity * 20) + (15 if step % 4 == 0 else 0) + build_boost // 2)
                 self.fs.noteon(CH["drums"], 42, vel)
                 threading.Timer(0.025, lambda: self.fs.noteoff(CH["drums"], 42)).start()
 
@@ -494,8 +509,12 @@ class MusicEngine:
         if state == "stress" and t % 2 == 0:
             self._play_stress_melody(eeg)
 
-        # ── Glitch (stres) — sebagai aksen, bukan lapisan utama ──────────
-        if state == "stress" and random.random() < 0.25:
+        # ── Stress climax — brass stab disonan saat stress build puncak ───
+        if state == "stress" and t % 4 == 0:
+            self._play_stress_climax()
+
+        # ── Glitch (stres) — sebagai aksen, probabilitas naik seiring build ─
+        if state == "stress" and random.random() < (0.20 + self._stress_build * 0.40):
             self._play_glitch(eeg)
 
         # ── Focus climax — choir line saat build puncak (>0.7) ───────────
@@ -530,7 +549,7 @@ class MusicEngine:
         str_vel = {
             "focus":  int(55 + self._build_level * 40),
             "relax":  55,   # lembut — tidak menghantam
-            "stress": 70,   # cluster disonan harus terdengar jelas
+            "stress": int(70 + self._stress_build * 35),  # makin keras seiring build
             "drowsy": 50,
         }[state]
 
@@ -604,7 +623,7 @@ class MusicEngine:
         vel = {
             "focus":  int(75 + self._build_level * 25),
             "relax":  60,
-            "stress": 95,
+            "stress": min(127, int(95 + self._stress_build * 22)),
             "drowsy": 45,
         }.get(state, 70)
 
@@ -675,6 +694,22 @@ class MusicEngine:
         dur_sec = (60.0 / self._bpm) * (0.4 if accent else 0.25)
         self.fs.noteon(CH["melody"], n, vel)
         threading.Timer(dur_sec, lambda: self.fs.noteoff(CH["melody"], n)).start()
+
+    def _play_stress_climax(self):
+        """Brass stab disonan saat stress build sangat tinggi (>0.7) — klimaks anxietas."""
+        if self._stress_build < 0.7:
+            return
+        chord = STRESS_PROGRESSIONS[self._chord_idx % len(STRESS_PROGRESSIONS)]
+        # Minor 2nd + tritone di atas root — sangat disonan dan menekan
+        stab = [chord[0], chord[0] + 1, chord[0] + 6]
+        vel = int(60 + self._stress_build * 55)   # 60–115
+        dur_sec = (60.0 / self._bpm) * 0.20        # sangat pendek, punchy
+        for n in stab:
+            if 0 <= n <= 127:
+                self.fs.noteon(CH["brass"], n, vel)
+        threading.Timer(dur_sec,
+            lambda stab=stab: [self.fs.noteoff(CH["brass"], n) for n in stab]
+        ).start()
 
     def _play_stress_perc(self, eeg: EEGState):
         """Perkusi erratic untuk state stress — nervous, tidak teratur."""
@@ -803,11 +838,16 @@ class MusicEngine:
     # ── state management ───────────────────────────────────────────────────
 
     def _update_build_level(self, state: str):
-        """Fokus tension naik perlahan, turun cepat saat state berubah."""
+        """Fokus tension naik perlahan, turun lambat saat state berubah."""
         if state == "focus":
-            self._build_level = min(1.0, self._build_level + 0.003)
+            self._build_level = min(1.0, self._build_level + 0.005)
         else:
-            self._build_level = max(0.0, self._build_level - 0.015)
+            self._build_level = max(0.0, self._build_level - 0.003)
+
+        if state == "stress":
+            self._stress_build = min(1.0, self._stress_build + 0.005)
+        else:
+            self._stress_build = max(0.0, self._stress_build - 0.003)
 
         if state != self._prev_state and self._prev_state is not None:
             self._on_state_change(self._prev_state, state)
@@ -850,7 +890,7 @@ class MusicEngine:
         target_bpm = {
             "focus":  80 + self._build_level * 15,   # 80→95 seiring build
             "relax":  55 + eeg.alpha * 10,            # 55→65 (lebih rileks)
-            "stress": 110 + eeg.beta * 18,            # 110→128 (game intense, urgent)
+            "stress": 110 + eeg.beta * 18 + self._stress_build * 22,  # 110→150 seiring build
             "drowsy": 45 + eeg.theta * 8,             # 45→53 (lebih lambat)
         }[state]
         # Smooth BPM transition
