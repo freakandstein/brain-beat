@@ -359,8 +359,8 @@ body {
   <div class="state-card">
     <div class="state-card-left">
       <div class="state-row">
-        <div id="state-badge">RELAX</div>
-        <div id="state-desc">Relaxed / Flow State</div>
+        <div id="state-badge">CALM</div>
+        <div id="state-desc">Calm / Relaxed</div>
       </div>
 
       <div class="metrics-row">
@@ -372,14 +372,10 @@ body {
           <span class="metric-label">HR</span>
           <span class="metric-value" id="hr-val" style="color:#fb7185">—</span>
         </div>
-        <div>
-          <span class="metric-label">BUILD</span>
-          <span class="metric-value" id="build-val-text">0.00</span>
-        </div>
       </div>
 
       <div class="bar-row">
-        <span class="bar-label">BUILD</span>
+        <span class="bar-label">TENSE</span>
         <div class="bar-track">
           <div class="bar-fill build" id="build-bar"></div>
         </div>
@@ -391,6 +387,20 @@ body {
           <div class="bar-fill stress-build" id="stress-build-bar"></div>
         </div>
         <span class="bar-val" id="stress-build-pct">0%</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label" id="conf-label" style="color:#94a3b8">SIGNAL</span>
+        <div class="bar-track">
+          <div class="bar-fill" id="conf-bar" style="background:#94a3b8;width:0%"></div>
+        </div>
+        <span class="bar-val" id="conf-pct">0%</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label" id="cons-label" style="color:#94a3b8">CONS</span>
+        <div class="bar-track">
+          <div class="bar-fill" id="cons-bar" style="background:#94a3b8;width:0%"></div>
+        </div>
+        <span class="bar-val" id="cons-pct">0%</span>
       </div>
     </div>
 
@@ -422,15 +432,6 @@ body {
   <!-- EEG Channels -->
   <div class="section-title">EEG CHANNELS</div>
 
-  <!-- Delta -->
-  <div class="channel">
-    <div class="channel-header">
-      <span class="channel-name delta">δ &nbsp;delta<span class="hz-label">0.5–4 Hz</span></span>
-      <span id="delta-val" style="font-family:monospace;font-size:0.78rem;color:#fb923c">—</span>
-    </div>
-    <canvas id="delta-wave" class="waveform-canvas"></canvas>
-  </div>
-
   <!-- Theta -->
   <div class="channel">
     <div class="channel-header">
@@ -452,7 +453,7 @@ body {
   <!-- Beta -->
   <div class="channel">
     <div class="channel-header">
-      <span class="channel-name beta">β &nbsp;beta<span class="hz-label">13–30 Hz</span></span>
+      <span class="channel-name beta">β &nbsp;beta<span class="hz-label">13–25 Hz</span></span>
       <span id="beta-val" style="font-family:monospace;font-size:0.78rem;color:#a78bfa">—</span>
     </div>
     <canvas id="beta-wave" class="waveform-canvas"></canvas>
@@ -481,16 +482,12 @@ body {
 <script src="/static/socket.io.min.js"></script>
 <script>
 const STATE_COLORS = {
-  focus:  '#c084fc',
-  relax:  '#4ade80',
-  stress: '#f87171',
-  drowsy: '#fbbf24',
+  calm:  '#4ade80',
+  tense: '#c084fc',
 };
 const STATE_DESC = {
-  focus:  'Focus / Concentration',
-  relax:  'Relaxed / Flow State',
-  stress: 'Stress / Frustration',
-  drowsy: 'Drowsy / Bored',
+  calm:  'Calm / Relaxed',
+  tense: 'Tense / Aroused',
 };
 
 // ── Socket.IO ──────────────────────────────────────────────────────────────
@@ -520,25 +517,38 @@ socket.on('state_update', (d) => {
   // Metrics
   document.getElementById('bpm-val').textContent = d.bpm.toFixed(1);
   document.getElementById('hr-val').textContent  = d.heart_rate ? d.heart_rate + ' bpm' : '—';
-  document.getElementById('build-val-text').textContent = d.build.toFixed(2);
-  document.getElementById('build-bar').style.width = (d.build * 100) + '%';
-  document.getElementById('build-pct').textContent = Math.round(d.build * 100) + '%';
+  const tl = d.tense_level || 0;
+  document.getElementById('build-bar').style.width = (tl * 100) + '%';
+  document.getElementById('build-pct').textContent = Math.round(tl * 100) + '%';
+  document.getElementById('stress-build-row').style.display = 'none';
 
-  const sb = d.stress_build || 0;
-  document.getElementById('stress-build-row').style.display = (d.state === 'stress') ? '' : 'none';
-  document.getElementById('stress-build-bar').style.width = (sb * 100) + '%';
-  document.getElementById('stress-build-pct').textContent = Math.round(sb * 100) + '%';
+  // Arousal index (raw, signed) — shown as SIGNAL bar label
+  const ar = d.arousal || 0;
+  // (hidden from metrics row, used only for conf-label coloring)
 
-  // EEG waveforms (raw µV²)
-  function fmtUV(v) {
-    if (v >= 100) return v.toFixed(0) + ' µV²';
-    if (v >= 10)  return v.toFixed(1) + ' µV²';
-    return v.toFixed(2) + ' µV²';
-  }
-  if (d.delta_raw != null) { waves.delta.push(d.delta_raw); document.getElementById('delta-val').textContent = fmtUV(d.delta_raw); }
-  if (d.theta_raw != null) { waves.theta.push(d.theta_raw); document.getElementById('theta-val').textContent = fmtUV(d.theta_raw); }
-  if (d.alpha_raw != null) { waves.alpha.push(d.alpha_raw); document.getElementById('alpha-val').textContent = fmtUV(d.alpha_raw); }
-  if (d.beta_raw  != null) { waves.beta.push(d.beta_raw);   document.getElementById('beta-val').textContent  = fmtUV(d.beta_raw);  }
+  // Confidence bar — sembunyikan saat device tidak connected
+  const museOk = (d.muse === 'connected');
+  const cf = museOk ? (d.confidence || 0) : 0;
+  const cfColor = cf > 0.66 ? '#4ade80' : cf > 0.33 ? '#fbbf24' : '#f87171';
+  document.getElementById('conf-bar').style.width  = (cf * 100) + '%';
+  document.getElementById('conf-bar').style.background = cfColor;
+  document.getElementById('conf-pct').textContent  = museOk ? Math.round(cf * 100) + '%' : '—';
+  document.getElementById('conf-label').style.color = museOk ? cfColor : '#94a3b8';
+
+  // Consistency bar
+  const cs = museOk ? (d.consistency || 0) : 0;
+  const csColor = cs > 0.75 ? '#4ade80' : cs > 0.56 ? '#fbbf24' : '#f87171';
+  document.getElementById('cons-bar').style.width  = (cs * 100) + '%';
+  document.getElementById('cons-bar').style.background = csColor;
+  document.getElementById('cons-pct').textContent  = museOk ? Math.round(cs * 100) + '%' : '—';
+  document.getElementById('cons-label').style.color = museOk ? csColor : '#94a3b8';
+
+  // EEG waveforms + dominant Hz display
+  function toDb(v) { return 10 * Math.log10(Math.max(v, 1e-10)); }
+  function fmtHz(hz) { return (hz != null) ? hz.toFixed(1) + ' Hz' : '—'; }
+  if (d.theta_raw != null) { waves.theta.push(Math.max(toDb(d.theta_raw), 0)); document.getElementById('theta-val').textContent = fmtHz(d.theta_hz); }
+  if (d.alpha_raw != null) { waves.alpha.push(Math.max(toDb(d.alpha_raw), 0)); document.getElementById('alpha-val').textContent = fmtHz(d.alpha_hz); }
+  if (d.beta_raw  != null) { waves.beta.push(Math.max(toDb(d.beta_raw),  0)); document.getElementById('beta-val').textContent  = fmtHz(d.beta_hz);  }
 
   // Sync muse dot jika halaman di-refresh saat sudah terhubung
   if (d.muse === 'connected' && !museConnected && !museDisconnecting) {
@@ -681,7 +691,7 @@ class Waveform {
     this.color    = color;
     this.buf      = [];
     this.MAX      = 120;  // 2 min at 1 Hz
-    this.scaleMax = 0.001; // auto-expands on first data
+    this.scaleMax = 1; // dB scale — auto-expands on first data
     this._dw      = 1;
     this._dh      = 1;
     this._resize();
@@ -745,7 +755,6 @@ class Waveform {
 
 const waves = {};
 document.addEventListener('DOMContentLoaded', () => {
-  waves.delta = new Waveform('delta-wave', '#fb923c');
   waves.theta = new Waveform('theta-wave', '#34d399');
   waves.alpha = new Waveform('alpha-wave', '#60a5fa');
   waves.beta  = new Waveform('beta-wave',  '#a78bfa');

@@ -10,19 +10,21 @@ Install: pip3 install muselsl pylsl
 Digunakan oleh music_server.py (interface tidak berubah).
 """
 
+import csv
 import subprocess
 import sys
 import threading
 import time
 import tempfile
 import os
+from datetime import datetime
 from typing import Callable, Optional
 
 import numpy as np
 
 # BrainFlow DataFilter — signal processing only (no BoardShim needed)
 try:
-    from brainflow.data_filter import DataFilter, DetrendOperations, WindowOperations
+    from brainflow.data_filter import DataFilter, DetrendOperations, WindowOperations, FilterTypes
     _BF_FILTER = True
 except ImportError:
     _BF_FILTER = False
@@ -105,13 +107,15 @@ class MuseConnector:
         self.error_msg          = ""
         self.heart_rate: Optional[float] = None
         self.channel_quality: dict = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
-        self.raw_bands: dict = {"delta": 0.0, "alpha": 0.0, "beta": 0.0, "theta": 0.0}
+        self.raw_bands: dict = {"alpha": 0.0, "beta": 0.0, "theta": 0.0}
+        self.peak_hz:  dict = {"alpha": None, "beta": None, "theta": None}
+        self.tbr: float = 0.5   # Theta/Beta Ratio frontal (0=focused, 1=drowsy)
 
         # Internal
         self.running       = False
         self._loop_tick    = 0
-        self._history      = {"delta": [], "alpha": [], "beta": [], "theta": []}
-        self._HIST_LEN     = 60
+        self._history      = {"alpha": [], "beta": [], "theta": [], "tbr": []}
+        self._HIST_LEN     = 240  # 60 s at 4 Hz update rate
         self._stream_proc: Optional[subprocess.Popen] = None
         self._cancel       = threading.Event()
         self._mac_address  = ""        # stored for auto-reconnect
@@ -134,11 +138,13 @@ class MuseConnector:
         self.running = False
         self._cancel.set()
         self._kill_proc()
-        self._history    = {"delta": [], "alpha": [], "beta": [], "theta": []}
+        self._history    = {"alpha": [], "beta": [], "theta": [], "tbr": []}
         self.heart_rate  = None
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
-        self.raw_bands   = {"delta": 0.0, "alpha": 0.0, "beta": 0.0, "theta": 0.0}
+        self.raw_bands   = {"alpha": 0.0, "beta": 0.0, "theta": 0.0}
+        self.peak_hz     = {"alpha": None, "beta": None, "theta": None}
+        self.tbr         = 0.5
         self._set_status("disconnected")
         print("■  Muse 2 disconnected.")
 
@@ -266,14 +272,25 @@ class MuseConnector:
         ppg_total = 0
 
         # EMA smoothing — mencegah spike tiba-tiba dari artifact/normalisasi
-        # alpha=0.35: nilai baru berkontribusi 35%, time constant ~3 detik
-        # (cukup responsif untuk tangkap focus nyata, tetap filter artifact)
-        EMA = 0.35
-        ema_d = ema_a = ema_b = ema_t = 0.5       # normalized EMA
-        ema_d_raw = ema_a_raw = ema_b_raw = ema_t_raw = 0.0  # raw uV2 EMA
+        # alpha=0.20 at 4 Hz: time constant ~1.1 detik
+        # Cukup responsif untuk genuine state change, tapi filter artifact pendek
+        EMA = 0.20
+        ema_a = ema_b = ema_t = 0.5       # normalized EMA
+        ema_tbr = 0.5                              # Theta/Beta Ratio EMA (frontal, normalized)
+        ema_tbr_raw = 1.0                          # Raw theta/beta ratio EMA — bypass normalization
+        ema_a_raw = ema_b_raw = ema_t_raw = 0.0  # raw uV2 EMA
+        _poor_streak = 0   # tick berturut-turut tanpa channel valid
+
+        # ── CSV logging ───────────────────────────────────────────────────
+        _csv_path  = f"eeg_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        _csv_file  = open(_csv_path, 'w', newline='')
+        _csv_w     = csv.writer(_csv_file)
+        _csv_w.writerow(['time', 'elapsed_s', 'alpha', 'beta', 'theta', 'tbr', 'state', 'hr'])
+        _t0 = time.time()
+        print(f"📊  Logging EEG ke {_csv_path}")
 
         while self.running:
-            time.sleep(1.0)
+            time.sleep(0.25)  # 4 Hz — lag max 250 ms sebelum EEG sampai ke engine
             self._loop_tick += 1
 
             # Subprocess health check
@@ -309,12 +326,13 @@ class MuseConnector:
                     ppg_ptr   += 1
                     ppg_total += 1
 
-            if eeg_total < SAMPLE_RATE:
-                continue  # not enough data yet
+            if eeg_total < SAMPLE_RATE * 2:
+                continue  # tunggu minimal 2 s data untuk resolusi delta yang cukup
 
             try:
-                # ── EEG window (last 1 s) ─────────────────────────────────
-                n     = min(eeg_total, SAMPLE_RATE)
+                # ── EEG window (last 2 s) ─────────────────────────────────────────────
+                # 512 samples: Welch averaging 2× windows → resolusi delta 2× lebih baik
+                n     = min(eeg_total, SAMPLE_RATE * 2)
                 start = (eeg_ptr - n) % EEG_MAX
                 if start + n <= EEG_MAX:
                     eeg_win = eeg_buf[:, start:start + n].copy()
@@ -327,8 +345,8 @@ class MuseConnector:
                 ch_quality = []
                 for i, name in enumerate(["TP9", "AF7", "AF8", "TP10"]):
                     std = float(np.std(eeg_win[i]))
-                    if std < 3.0 or std > 400.0:  q = 0.0
-                    elif std > 150.0:              q = 0.25
+                    if std < 3.0 or std > 400.0:  q = 0.0    # flat atau extreme noise
+                    elif std > 300.0:              q = 0.25   # sangat noisy tapi masih ada sinyal
                     elif std < 8.0:                q = std / 8.0 * 0.6
                     else:                          q = 1.0
                     q = round(q, 2)
@@ -338,50 +356,192 @@ class MuseConnector:
                 # ── Band power — hanya dari channel yang cukup bagus ──────
                 # Channel dengan quality <= 0.0 (flat/disconnected/sangat noisy)
                 # dikecualikan karena noise broadband membuat semua band tampak tinggi
-                delta_list, alpha_list, beta_list, theta_list = [], [], [], []
+                _CH_NAMES = ["TP9", "AF7", "AF8", "TP10"]
+                alpha_list, beta_list, theta_list = [], [], []
+                frontal_beta_list, frontal_theta_list = [], []  # AF7=1, AF8=2 only
+
+                # ── Pass 1: deteksi frontal EMG SEBELUM proses temporal ────────
+                # Bug sebelumnya: loop urut 0→3, TP9 masuk beta_list sebelum AF7/AF8
+                # sempat men-set _frontal_emg. Sekarang frontal discan dulu.
+                _frontal_emg = False
+                for ch in (1, 2):  # AF7, AF8
+                    if ch_quality[ch] < 0.25:
+                        continue
+                    _fd = eeg_win[ch].copy()
+                    DataFilter.detrend(_fd, DetrendOperations.CONSTANT.value)
+                    # Hanya butuh bandpass dan P2P untuk pre-scan — cepat
+                    DataFilter.perform_bandpass(
+                        _fd, SAMPLE_RATE, 0.5, 40.0, 4,
+                        FilterTypes.BUTTERWORTH.value, 0
+                    )
+                    if float(np.ptp(_fd)) > 150.0:
+                        _frontal_emg = True
+                        break
+                    # Cek rasio spektral (EMG sustained low-amplitude)
+                    _psd_pre = DataFilter.get_psd_welch(
+                        _fd, SAMPLE_RATE, SAMPLE_RATE // 2, SAMPLE_RATE,
+                        WindowOperations.BLACKMAN_HARRIS.value
+                    )
+                    _blo = DataFilter.get_band_power(_psd_pre, 13.0, 25.0)
+                    _bhi = DataFilter.get_band_power(_psd_pre, 25.0, 40.0)
+                    if _bhi / (_blo + 1e-6) > 0.50:
+                        _frontal_emg = True
+                        break
+
+                # ── Pass 2: hitung band power semua channel ────────────────────
+                # Helper: spectral centroid (Hz dominan) dalam rentang band.
+                # Rumus: Σ(f × PSD(f)) / Σ(PSD(f)) — lebih stabil dari peak frequency.
+                def _centroid(p, f_lo, f_hi):
+                    mask = (p[1] >= f_lo) & (p[1] <= f_hi)
+                    if not mask.any(): return (f_lo + f_hi) / 2.0
+                    a = p[0][mask]
+                    s = float(a.sum())
+                    if s < 1e-10: return (f_lo + f_hi) / 2.0
+                    return float(np.sum(p[1][mask] * a) / s)
+
+                alpha_hz_list, beta_hz_list, theta_hz_list = [], [], []
                 for ch in range(4):
                     if ch_quality[ch] < 0.25:
                         continue  # skip channel poor/disconnected
                     ch_data = eeg_win[ch].copy()
                     DataFilter.detrend(ch_data, DetrendOperations.CONSTANT.value)
+
+                    # ── Cek kontaminasi PLN 50Hz ───────────────────────────────
+                    # Hitung PSD dari sinyal asli untuk mengukur rasio power PLN
+                    psd_raw = DataFilter.get_psd_welch(
+                        ch_data.copy(), SAMPLE_RATE, SAMPLE_RATE // 2, SAMPLE_RATE,
+                        WindowOperations.BLACKMAN_HARRIS.value
+                    )
+                    pln_power  = DataFilter.get_band_power(psd_raw, 48.0, 52.0)
+                    eeg_power  = DataFilter.get_band_power(psd_raw,  1.0, 45.0)
+                    pln_ratio  = pln_power / (eeg_power + 1e-10)
+                    if ch in (1, 2) and pln_ratio > 0.30 and pln_power > 5.0:
+                        # AF7/AF8: PLN dominan → skip dari komputasi band power,
+                        # tapi JANGAN override channel_quality (elektroda mungkin masih nempel,
+                        # hanya lingkungan noisy). Quality tetap dari std di atas.
+                        continue
+                    if eeg_power > 30000.0:
+                        # Amplitudo terlalu tinggi (std >> 295 µV) — elektroda melayang/off-head
+                        self.channel_quality[_CH_NAMES[ch]] = 0.0
+                        ch_quality[ch] = 0.0
+                        continue
+
+                    # ── Bandpass 0.5–40 Hz — preprocessing standar EEG ──────────
+                    # Menghapus sekaligus:
+                    #   • DC drift & slow baseline wander  (< 0.5 Hz)
+                    #   • EMG otot rahang/leher             (> 40 Hz)
+                    #   • PLN 50 Hz                         (> 40 Hz, menggantikan notch)
+                    DataFilter.perform_bandpass(
+                        ch_data, SAMPLE_RATE, 0.5, 40.0, 4,
+                        FilterTypes.BUTTERWORTH.value, 0
+                    )
+
+                    # ── Peak-to-peak artifact rejection ──────────────────────────
+                    # Frontal sudah discan di pass 1; check ini hanya untuk temporal.
+                    _p2p_limit = 300.0
+                    if float(np.ptp(ch_data)) > _p2p_limit:
+                        continue
+
                     psd = DataFilter.get_psd_welch(
                         ch_data, SAMPLE_RATE, SAMPLE_RATE // 2, SAMPLE_RATE,
                         WindowOperations.BLACKMAN_HARRIS.value
                     )
-                    delta_list.append(DataFilter.get_band_power(psd, 0.5,  4.0))
-                    alpha_list.append(DataFilter.get_band_power(psd, 8.0,  13.0))
-                    beta_list.append( DataFilter.get_band_power(psd, 13.0, 30.0))
-                    theta_list.append(DataFilter.get_band_power(psd, 4.0,   8.0))
+                    b_pow = DataFilter.get_band_power(psd, 13.0, 25.0)
+                    t_pow = DataFilter.get_band_power(psd,  4.0,  8.0)
+
+                    if ch in (1, 2):
+                        # AF7/AF8: tidak pernah masuk beta_list (EMG frontalis).
+                        # Masuk frontal TBR hanya jika spektrum bersih (sudah dicek pass 1).
+                        if not _frontal_emg:
+                            frontal_beta_list.append(b_pow)
+                            frontal_theta_list.append(t_pow)
+                        # alpha/theta tetap dipakai dari frontal
+                        a_pow = DataFilter.get_band_power(psd, 8.0, 13.0)
+                        alpha_list.append(a_pow); theta_list.append(t_pow)
+                        alpha_hz_list.append(_centroid(psd, 8.0, 13.0))
+                        theta_hz_list.append(_centroid(psd, 4.0,  8.0))
+                        # beta_list: TIDAK ditambahkan dari frontal
+                    else:
+                        # TP9/TP10: satu-satunya sumber beta.
+                        # Jika frontal EMG terdeteksi (pass 1), skip beta temporal juga
+                        # karena volume conduction dari frontalis ke TP9/TP10.
+                        a_pow = DataFilter.get_band_power(psd, 8.0, 13.0)
+                        alpha_list.append(a_pow); theta_list.append(t_pow)
+                        alpha_hz_list.append(_centroid(psd, 8.0, 13.0))
+                        theta_hz_list.append(_centroid(psd, 4.0,  8.0))
+                        if not _frontal_emg:
+                            beta_list.append(b_pow)
+                            beta_hz_list.append(_centroid(psd, 13.0, 25.0))
 
                 if not alpha_list:
-                    continue  # semua channel poor — skip update, jangan kirim nilai palsu
+                    # Semua channel poor atau PLN-dominated
+                    # Decay raw_bands menuju 0 sebagai indikator visual “tidak ada sinyal”
+                    _poor_streak += 1
+                    if _poor_streak >= 3:  # setelah 3 detik berturut-turut
+                        decay = 0.80
+                        ema_a_raw *= decay
+                        ema_b_raw *= decay; ema_t_raw *= decay
+                        self.raw_bands = {
+                            "alpha": round(ema_a_raw, 2),
+                            "beta":  round(ema_b_raw, 2),
+                            "theta": round(ema_t_raw, 2),
+                        }
+                    continue  # jangan kirim nilai palsu ke engine
+                _poor_streak = 0
 
-                delta = self._normalize("delta", float(np.mean(delta_list)))
                 alpha = self._normalize("alpha", float(np.mean(alpha_list)))
-                beta  = self._normalize("beta",  float(np.mean(beta_list)))
                 theta = self._normalize("theta", float(np.mean(theta_list)))
 
-                # EMA smoothing — blends spike sebelum dikirim ke engine
-                ema_d = ema_d * (1 - EMA) + delta * EMA
-                ema_a = ema_a * (1 - EMA) + alpha * EMA
-                ema_b = ema_b * (1 - EMA) + beta  * EMA
-                ema_t = ema_t * (1 - EMA) + theta * EMA
-                self.engine.set_eeg(ema_a, ema_b, ema_t, ema_d)
+                # beta_list kosong → frontal EMG terdeteksi, semua temporal juga di-skip.
+                # Jangan update ema_b — biarkan EMA decay sendiri ke baseline.
+                if beta_list:
+                    beta = self._normalize("beta", float(np.mean(beta_list)))
+                    ema_b_updated = True
+                else:
+                    beta = ema_b   # pakai nilai EMA sebelumnya, tidak di-update
+                    ema_b_updated = False
+
+                # TBR (Theta/Beta Ratio) — dari frontal (AF7+AF8) jika tersedia
+                # Frontal TBR adalah biomarker attention paling tervalidasi:
+                #   TBR rendah  → beta > theta di frontal → focused (genuine)
+                #   TBR tinggi  → theta > beta di frontal → drowsy / inattentive
+                # Pakai raw ratio sebagai input normalize agar scale tetap bermakna
+                if frontal_beta_list:
+                    tbr_raw = float(np.mean(frontal_theta_list)) / (float(np.mean(frontal_beta_list)) + 1e-6)
+                elif beta_list:
+                    tbr_raw = float(np.mean(theta_list)) / (float(np.mean(beta_list)) + 1e-6)
+                else:
+                    tbr_raw = ema_tbr_raw  # jaga nilai sebelumnya
+                tbr = self._normalize("tbr", tbr_raw)
+
+                # EMA smoothing
+                ema_a   = ema_a   * (1 - EMA) + alpha * EMA
+                if ema_b_updated:
+                    ema_b = ema_b * (1 - EMA) + beta  * EMA
+                ema_t   = ema_t   * (1 - EMA) + theta * EMA
+                ema_tbr     = ema_tbr     * (1 - EMA) + tbr     * EMA
+                ema_tbr_raw = ema_tbr_raw * (1 - EMA) + tbr_raw * EMA
+                self.tbr = round(ema_tbr, 3)
+                self.engine.set_eeg(ema_a, ema_b, ema_t, tbr=ema_tbr, tbr_raw=ema_tbr_raw)
 
                 # Raw uV2 EMA — untuk display UI
-                ema_d_raw = ema_d_raw*(1-EMA) + float(np.mean(delta_list))*EMA
                 ema_a_raw = ema_a_raw*(1-EMA) + float(np.mean(alpha_list))*EMA
-                ema_b_raw = ema_b_raw*(1-EMA) + float(np.mean(beta_list)) *EMA
+                if beta_list:
+                    ema_b_raw = ema_b_raw*(1-EMA) + float(np.mean(beta_list)) *EMA
                 ema_t_raw = ema_t_raw*(1-EMA) + float(np.mean(theta_list))*EMA
                 self.raw_bands = {
-                    "delta": round(ema_d_raw, 2),
                     "alpha": round(ema_a_raw, 2),
                     "beta":  round(ema_b_raw, 2),
                     "theta": round(ema_t_raw, 2),
                 }
+                self.peak_hz = {
+                    "alpha": round(float(np.mean(alpha_hz_list)), 1) if alpha_hz_list else self.peak_hz["alpha"],
+                    "beta":  round(float(np.mean(beta_hz_list)),  1) if beta_hz_list  else self.peak_hz["beta"],
+                    "theta": round(float(np.mean(theta_hz_list)), 1) if theta_hz_list else self.peak_hz["theta"],
+                }
 
                 # ── HR from PPG every 5 s ─────────────────────────────────
-                if ppg_inlet and self._loop_tick % 5 == 0 and ppg_total >= PPG_SR * 4:
+                if ppg_inlet and self._loop_tick % 20 == 0 and ppg_total >= PPG_SR * 4:  # every 5 s at 4 Hz
                     n_p  = min(ppg_total, PPG_MAX)
                     sp   = (ppg_ptr - n_p) % PPG_MAX
                     if sp + n_p <= PPG_MAX:
@@ -392,21 +552,33 @@ class MuseConnector:
                     if hr is not None:
                         self.heart_rate = hr
 
-                # ── Terminal log ──────────────────────────────────────────
-                state_hint = (
-                    "stress" if beta > 0.65 and theta > 0.55 else
-                    "focus"  if beta > 0.60 and alpha < 0.35 else
-                    "drowsy" if theta > 0.65 else
-                    "relax"
-                )
-                hr_str = f"  ♥={self.heart_rate:.0f}" if self.heart_rate else ""
-                print(f"  EEG  α={ema_a:.2f}  β={ema_b:.2f}  θ={ema_t:.2f}  → {state_hint}{hr_str}")
+                # ── Terminal log + CSV — 1 Hz (setiap 4 tick di 4 Hz) ────────────────
+                if self._loop_tick % 4 == 0:
+                    if ema_tbr_raw > 2.5 or (ema_tbr > 0.55 and ema_b < 0.40):
+                        state_hint = "calm"
+                    else:
+                        state_hint = (
+                            "tense" if (0.45 * ema_b - 0.25 * ema_a - 0.30 * ema_tbr) > 0.0
+                            else "calm"
+                        )
+                    hr_str = f"  ♥={self.heart_rate:.0f}" if self.heart_rate else ""
+                    print(f"  EEG  α={ema_a:.2f}  β={ema_b:.2f}  θ={ema_t:.2f}  TBR={ema_tbr:.2f}(raw={ema_tbr_raw:.1f})  → {state_hint}{hr_str}")
+                    _csv_w.writerow([
+                        datetime.now().strftime('%H:%M:%S'),
+                        round(time.time() - _t0, 1),
+                        round(ema_a, 3), round(ema_b, 3), round(ema_t, 3),
+                        round(ema_tbr, 3), state_hint,
+                        round(self.heart_rate) if self.heart_rate else ''
+                    ])
+                    _csv_file.flush()
 
             except Exception as e:
                 if self.running:
                     print(f"⚠️  Loop error: {e}")
 
         # Loop ended — clean up
+        _csv_file.close()
+        print(f"📊  Session log disimpan: {_csv_path}")
         err = self._read_err_log()
         if err:
             print(f"  muselsl last output: {err}")

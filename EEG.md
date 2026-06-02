@@ -4,14 +4,17 @@
 
 | Komponen | Status | Keterangan |
 |---|---|---|
-| **music_engine.py** | ✅ Selesai | Generative music via FluidSynth, 4 state, state vote smoothing, build + stress build |
-| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit δ/θ/α/β normalized + raw µV² |
-| **Web UI (index.html)** | ✅ Selesai | OBS overlay — Canvas waveforms δ/θ/α/β realtime (µV²), EEG Channel Map, HR, socket live-dot |
-| **State detection** | ✅ Selesai | Threshold-based + vote buffer 2 detik (anti-flicker) |
+| **music_engine.py** | ✅ Selesai | Generative music via FluidSynth, binary calm/tense, bar-locked transitions, tense build-up level |
+| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/confidence/consistency + raw µV² + HR |
+| **Web UI (index.html)** | ✅ Selesai | OBS overlay — BPM, HR, BUILD bar, SIGNAL (confidence), CONS (consistency), EEG channel map, waveform Hz display |
+| **State detection** | ✅ Selesai | Binary calm/tense — weighted arousal index + raw TBR drowsy override + asymmetric vote buffer |
+| **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
 | **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
 | **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
 | **Channel quality filter** | ✅ Selesai | Channel poor di-skip dari band power computation |
-| **Delta band** | ✅ Selesai | δ 0.5–4 Hz ditambah di semua layer (connector/engine/server/UI) |
+| **Spektral Hz display** | ✅ Selesai | Spectral centroid per band ditampilkan di UI dalam Hz |
+| **Delta band** | ✅ Dihapus | δ tidak relevan untuk waking state — dihapus dari semua layer (connector/engine/server/UI) |
+| **Musik saat Muse belum connect** | ✅ Selesai | engine.start() hanya dipanggil saat Muse status = "connected", stop saat disconnect |
 | **ML Classifier** | 🔲 Belum | Threshold cukup untuk tahap awal, upgrade SVM/LDA nanti |
 
 ---
@@ -65,28 +68,38 @@ Pendekatan ini dipilih karena:
 
 ### Mental State yang Dideteksi
 
-| State | Sinyal EEG | Channel Utama | Threshold Detection | Fallback |
-|---|---|---|---|---|
-| **Stres/Frustrasi** | Beta + Theta tinggi | AF7/AF8 | beta > 0.70 AND theta > 0.62 | (prioritas pertama) |
-| **Fokus/Konsentrasi** | Beta moderat, Alpha rendah | AF7/AF8 | beta > 0.52 AND alpha < 0.45 | beta > 0.40 |
-| **Rileks/Flow State** | Alpha tinggi (8–13Hz) | TP9/TP10 | alpha > 0.55 AND beta < 0.4 | — |
-| **Kantuk/Bosan** | Theta dominan (4–8Hz) + Delta | Semua channel | theta > 0.65 | — |
+Sistem menggunakan **binary 2-class classifier**: `calm` vs `tense`.
 
-> Nilai alpha/beta/theta/delta adalah **normalized 0–1** menggunakan rolling percentile (p10–p90, window 60 sampel).
-> Raw band power dalam **µV²** juga dikirim ke UI secara terpisah untuk display waveform.
-> Channel dengan signal quality < 0.25 **dikecualikan** dari band power computation.
+| State | Sinyal EEG | Logika Deteksi |
+|---|---|---|
+| **Tense / Aroused** | Beta dominan, alpha & TBR rendah | `arousal = 0.50·β − 0.25·α − 0.25·TBR > 0.02` |
+| **Calm / Relaxed** | Alpha/theta dominan, beta rendah | `arousal ≤ 0.02` — atau drowsy override aktif |
+
+**Drowsy override** (anti-misklasifikasi mengantuk sebagai tense):
+```
+tbr_raw > 2.0            → force calm  (theta 2× beta secara absolut)
+tbr_norm > 0.45 AND beta_norm < 0.45  → force calm  (normalized check)
+beta_norm < 0.25         → force calm  (beta sangat rendah = hampir tidur)
+```
+
+> **Kenapa dead zone 0.02?** Fluktuasi EEG minor selalu ada; arousal harus *jelas* positif untuk vote tense, bukan sekedar sedikit di atas nol.
+
+> Nilai alpha/beta/theta/TBR yang dikirim ke engine adalah **normalized 0–1** (rolling percentile p10–p90, window 60 sampel).
+> Raw band power dalam **µV²** dikirim ke UI terpisah.
+> Channel quality < 0.25 **dikecualikan** dari band power computation.
 
 ### State Smoothing (Anti-Flicker)
 
-Nilai EEG mentah berfluktuasi setiap 16th note tick (~8x/detik di 120 BPM). Tanpa smoothing, state bisa loncat-loncat meski kondisi otak masih sama.
+Nilai EEG mentah berfluktuasi setiap 16th note tick. Tanpa smoothing, state bisa loncat-loncat meski kondisi otak masih sama.
 
-**Mekanisme**: vote buffer 16 tick (~2 detik) — state aktif = **mayoritas** dari 16 tick terakhir.
+**Mekanisme**: asymmetric vote buffer 12 tick — **masuk tense lebih ketat, keluar lebih mudah**.
 
 | Parameter | Nilai | Efek |
 |---|---|---|
-| Vote buffer size | 16 tick | ~2 detik di 120 BPM |
-| Minimum hold time | Implisit: butuh >8 tick baru berubah | State tidak bisa flip dalam <1 detik |
-| Implementasi | `Counter(deque(maxlen=16)).most_common(1)` | O(1) per tick |
+| Vote buffer size | 12 tick | ~1.5–2.5 detik tergantung BPM |
+| Masuk tense | ≥ 8/12 = 67% | Beta harus sustained ~1.5 detik |
+| Keluar tense | ≥ 4/12 = 33% calm | Relaks cepat begitu kondisi membaik |
+| Implementasi | `Counter(deque(maxlen=12))` | O(1) per tick |
 
 ### Pipeline Overlay Stream
 
@@ -101,21 +114,26 @@ BrainFlow DataFilter          ← [✅ Impl.] PSD Welch, band power (filter only
     ↓
 Channel Quality Filter        ← [✅ Impl.] Skip channel quality < 0.25
     ↓
-Band Power δ/θ/α/β            ← [✅ Impl.] 0.5–4 / 4–8 / 8–13 / 13–30 Hz
+Band Power θ/α/β              ← [✅ Impl.] 4–8 / 8–13 / 13–25 Hz (delta dihapus — hanya deep sleep)
     ↓
-Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.35
-    ↓                                     Juga track raw µV² untuk display UI
-Mental State Classifier       ← [✅ Impl.] Threshold rules + vote buffer 2s
-    ↓
+EMG Rejection (2-pass)        ← [✅ Impl.] Pass 1: pre-scan AF7/AF8 frontal EMG sebelum temporal
+    ↓                                      Pass 2: beta dari TP9/TP10 di-blank jika frontal EMG aktif
+Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.20
+    ↓                                     Juga track raw µV² + spectral centroid Hz untuk display UI
+Mental State Classifier       ← [✅ Impl.] Binary calm/tense — arousal index 0.50β−0.25α−0.25TBR
+    ↓                                      Drowsy override: tbr_raw>2.0 OR beta<0.25
+    ↓                                      Asymmetric vote buffer 12 tick (67% masuk, 33% keluar)
 Generative Music Engine       ← [✅ Impl.] FluidSynth + MIDI per state
-(music_engine.py)                          4 state + focus build + stress build
-    ↓
+(music_engine.py)                          calm (BPM 55–72) vs tense (BPM 80–130)
+    ↓                                      bar-locked transitions (t%8==0, setiap half-bar)
+    ↓                                      Musik HANYA aktif saat Muse 2 terhubung
 WebSocket Server              ← [✅ Impl.] Flask-SocketIO, port 8765
-(music_server.py)                          payload: state, BPM, build, δ/θ/α/β
-    ↓                                      normalized + raw µV², HR, channel quality
-HTML/CSS/JS Overlay           ← [✅ Impl.] Canvas waveforms δ/θ/α/β (µV²),
-(templates/index.html)                     EEG Channel Map SVG, socket live-dot
-    ↓
+(music_server.py)                          payload: state, BPM, tense_level,
+    ↓                                      arousal, confidence, consistency, eeg_active
+    ↓                                      θ/α/β raw µV², θ/α/β Hz centroid, HR, muse status
+HTML/CSS/JS Overlay           ← [✅ Impl.] BPM, HR, BUILD bar, SIGNAL (confidence),
+(templates/index.html)                     CONS (consistency), EEG channel map SVG,
+    ↓                                      waveform canvas + Hz centroid per band
 OBS Browser Source            ← Ditampilkan di stream
 ```
 
@@ -242,19 +260,18 @@ Ide-ide di bawah ini melampaui use case utama streaming game, mencakup berbagai 
 
 ### 🎮 Gaming & Entertainment
 
-**1. Emotion-Reactive Generative Music** ✅ *In progress*
-Real-time komposisi musik yang berubah berdasarkan mental state secara live — bukan sekedar playlist berdasarkan mood. Melodi, tempo, dan harmoni mengikuti sinyal alpha/beta/theta secara langsung.
+**1. Emotion-Reactive Generative Music** ✅ *Live — Muse 2 terhubung*
+Real-time komposisi musik yang berubah berdasarkan mental state secara live. Melodi, tempo, dan harmoni mengikuti sinyal alpha/beta/theta secara langsung dari Muse 2.
 
-Stack yang dipakai: **FluidSynth + Soundfont** (Python) via `music_engine.py`.
+Stack: **FluidSynth 2.4.x + pyfluidsynth 1.3.4 + Soundfont GM** via `music_engine.py`.
 
-| State | Karakter Musik |
-|---|---|
-| Fokus | String ostinato + brass build-up (Hans Zimmer style) |
-| Rileks | String pad + choir, reverb dalam, maj7 chord |
-| Stres | Glitch stuttering, cluster disonan, dry/abrasif |
-| Kantuk | Open fifth mengambang, tempo sangat lambat |
+| State | Karakter Musik | BPM |
+|---|---|---|
+| **Calm** | String pad + choir, reverb dalam, maj7 progressi, ostinato pelan | 55–65 |
+| **Tense** | Brass swell, ostinato cepat, glitch stuttering, disonansi cluster | 80–130 |
 
-Input saat ini: keyboard manual. Nanti: nilai band power langsung dari BrainFlow.
+Transisi antar state dikunci ke bar boundary (16th note tick, t%16==0) — tidak abrupt mid-bar.
+UI menampilkan **SIGNAL** (confidence: seberapa jauh dari ambang batas 0.0) dan **CONS** (consistency: proporsi vote buffer yang sepakat) untuk monitoring signal quality.
 
 **2. EEG-Driven Procedural Storytelling**
 Game RPG/visual novel yang cabang ceritanya tidak ditentukan oleh pilihan tombol, tapi oleh mental state pemain. Kalau otak mendeteksi stres saat konfrontasi, karakter bereaksi berbeda dibanding saat rileks. Genuine adaptive narrative berbasis biofeedback.

@@ -1,7 +1,7 @@
 # EEG Music Engine
 
-Generative music engine yang merespons nilai EEG (delta/alpha/beta/theta) secara realtime.
-Musik berubah otomatis berdasarkan kondisi mental: fokus, rileks, stres, atau kantuk.
+Generative music engine yang merespons nilai EEG (alpha/beta/theta) secara realtime.
+Musik berubah otomatis berdasarkan kondisi mental: fokus/rileks (calm) atau stres/tegang (tense).
 
 ## Arsitektur
 
@@ -20,13 +20,15 @@ BrainFlow / Simulator
 
 | Band | Range | Normalized | Raw display | Kondisi dominan |
 |---|---|---|---|---|
-| **δ delta** | 0.5–4 Hz | 0–1 via p10–p90 | µV² (biasanya terbesar, sifat 1/f) | Tidur dalam, kantuk berat |
-| **θ theta** | 4–8 Hz | 0–1 | µV² | Mengantuk, meditasi, drowsy |
-| **α alpha** | 8–13 Hz | 0–1 | µV² | Rileks, mata tertutup, flow |
-| **β beta** | 13–30 Hz | 0–1 | µV² (biasanya terkecil) | Fokus, aktif berpikir, stres |
+| **θ theta** | 4–8 Hz | 0–1 via p10–p90 | µV² + Hz centroid | Mengantuk, meditasi, drowsy |
+| **α alpha** | 8–13 Hz | 0–1 | µV² + Hz centroid | Rileks, mata tertutup, flow |
+| **β beta** | 13–25 Hz | 0–1 | µV² + Hz centroid | Fokus, aktif berpikir, stres |
 
-> Raw µV² hanya untuk display UI. State detection menggunakan nilai normalized 0–1.
-> Delta selalu jauh lebih besar dari beta dalam satuan µV² — ini normal (karakteristik 1/f sinyal EEG).
+> **Delta (δ) dihapus** — delta hanya relevan saat deep sleep, tidak berguna untuk waking state monitoring. Dihapus dari semua layer: connector, engine, server, dan UI.
+
+> Raw µV² hanya untuk display waveform UI. State detection menggunakan nilai normalized 0–1.
+> Beta dibatasi 13–25 Hz (bukan 30 Hz) untuk menghindari kontaminasi EMG otot wajah (25–40 Hz).
+> **Hz centroid** per band (spectral centroid) ditampilkan di UI menggantikan nilai µV² di label — lebih intuitif.
 
 ## Instalasi
 
@@ -101,18 +103,27 @@ Cocok digunakan sebagai **OBS browser source** (overlay stream).
 
 ### State Detection
 
-| Kondisi EEG (normalized 0–1) | State | Prioritas |
+Sistem menggunakan **binary 2-class**: `calm` vs `tense`.
+
+```
+arousal = 0.50 × beta − 0.25 × alpha − 0.25 × TBR
+```
+
+**Tense** jika `arousal > 0.02` AND bertahan 8/12 tick (~1.5 detik)
+**Calm** jika `arousal ≤ 0.02` OR drowsy override aktif
+
+**Drowsy override** (paksa calm meski arousal positif):
+```
+tbr_raw > 2.0           → theta 2× lebih besar dari beta secara absolut
+tbr_norm > 0.45 AND beta < 0.45  → normalized check
+beta < 0.25             → beta terlalu rendah, hampir ketiduran
+```
+
+**Asymmetric vote buffer** — masuk tense lebih sulit, keluar lebih mudah:
+| Transisi | Threshold | Waktu (~72 BPM) |
 |---|---|---|
-| beta > 0.70 **AND** theta > 0.62 | `stress` | 1 (tertinggi) |
-| beta > 0.52 **AND** alpha < 0.45 | `focus` | 2 |
-| alpha > 0.55 **AND** beta < 0.4 | `relax` | 3 |
-| theta > 0.65 | `drowsy` | 4 |
-| beta > 0.40 | `focus` (fallback) | 5 |
-| default | `relax` | 6 |
-
-**Anti-flicker**: vote buffer `deque(maxlen=16)` + `Counter.most_common(1)` — state aktif = mayoritas 16 tick terakhir (~2 detik di 120 BPM).
-
-**EMA smoothing** sebelum masuk engine: `EMA=0.35`, time constant ~3 detik.
+| calm → tense | 8/12 = 67% | ~1.5 detik |
+| tense → calm | 4/12 = 33% | ~0.8 detik |
 
 ### Musik per State
 
@@ -164,40 +175,41 @@ Implementasi aktual menggunakan **muselsl + pylsl** (bukan BrainFlow BoardShim):
 # brainflow_connector.py — ringkasan alur
 
 # 1. Launch muselsl sebagai subprocess
-script = ("from muselsl import stream; "
-          f"stream(address='{mac_address}', ppg_enabled=True, ...")
-proc = subprocess.Popen([sys.executable, "-c", script], ...)
+proc = subprocess.Popen([sys.executable, "-c",
+    f"from muselsl import stream; stream(address='{mac}', ppg_enabled=True)"])
 
-# 2. Resolve LSL stream yang dibuat muselsl
-eeg_streams = resolve_byprop("type", "EEG", timeout=1.0)
-eeg_inlet = StreamInlet(eeg_streams[0])
+# 2. Resolve LSL stream
+eeg_inlet = StreamInlet(resolve_byprop("type", "EEG", timeout=1.0)[0])
 
-# 3. Loop tiap 1 detik: pull chunk, hitung band power
+# 3. Loop tiap 250ms (4 Hz): pull chunk, hitung band power
 chunk, _ = eeg_inlet.pull_chunk(timeout=0.0, max_samples=512)
 
-# 4. Channel quality filter
-std = np.std(eeg_win[ch])
-q = 0.0 if std < 3.0 or std > 400.0 else 1.0  # simplified
+# 4. Pass 1: pre-scan AF7/AF8 untuk frontal EMG
+_frontal_emg = False
+for ch in (1, 2):  # AF7, AF8
+    if np.ptp(filtered) > 150.0 or b_hi / (b_lo + 1e-6) > 0.50:
+        _frontal_emg = True; break
 
-# 5. Band power via BrainFlow DataFilter (4 band)
+# 5. Pass 2: band power per channel
+# Frontal (AF7/AF8): alpha + theta saja, TIDAK pernah beta
+# Temporal (TP9/TP10): semua band, tapi beta di-skip jika _frontal_emg=True
 psd = DataFilter.get_psd_welch(ch_data, 256, 128, 256, BLACKMAN_HARRIS)
-delta_list.append(DataFilter.get_band_power(psd, 0.5,  4.0))
-alpha_list.append(DataFilter.get_band_power(psd, 8.0,  13.0))
-beta_list.append( DataFilter.get_band_power(psd, 13.0, 30.0))
-theta_list.append(DataFilter.get_band_power(psd, 4.0,   8.0))
+beta_list.append(DataFilter.get_band_power(psd, 13.0, 25.0))  # 25 Hz max (bukan 30)
+beta_hz_list.append(_centroid(psd, 13.0, 25.0))  # spectral centroid
 
 # 6. Normalize + EMA → kirim ke engine
-delta = self._normalize("delta", np.mean(delta_list))  # rolling p10–p90
-ema_d = ema_d * 0.65 + delta * 0.35
-self.engine.set_eeg(ema_a, ema_b, ema_t, ema_d)
+alpha = self._normalize("alpha", np.mean(alpha_list))  # rolling p10–p90
+ema_a = ema_a * 0.80 + alpha * 0.20  # EMA=0.20, time constant ~1.1 detik
+self.engine.set_eeg(ema_a, ema_b, ema_t, tbr=ema_tbr, tbr_raw=ema_tbr_raw)
 
-# 7. Raw µV² EMA → simpan di self.raw_bands untuk display UI
-ema_d_raw = ema_d_raw * 0.65 + np.mean(delta_list) * 0.35
-self.raw_bands = {"delta": ema_d_raw, "alpha": ema_a_raw, ...}
+# 7. Raw µV² EMA + Hz centroid → simpan untuk display UI
+ema_a_raw = ema_a_raw * 0.80 + np.mean(alpha_list) * 0.20
+self.raw_bands  = {"alpha": ema_a_raw, "beta": ema_b_raw, "theta": ema_t_raw}
+self.peak_hz    = {"alpha": centroid_a, "beta": centroid_b, "theta": centroid_t}
 ```
 
-Server (`music_server.py`) membaca `muse.raw_bands` dan mengirim ke frontend sebagai
-`delta_raw`, `alpha_raw`, `beta_raw`, `theta_raw` dalam payload `state_update`.
+**engine.start()** hanya dipanggil saat `muse_status == "connected"` — tidak ada suara sebelum Muse terhubung.
+**engine.stop()** dipanggil saat `muse_status == "disconnected"` atau `"error"`.
 
 ## Troubleshooting
 

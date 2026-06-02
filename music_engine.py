@@ -8,10 +8,8 @@ Penggunaan:
     python music_engine.py
 
 Kontrol keyboard (saat berjalan):
-    1  →  preset: rileks
-    2  →  preset: fokus
-    3  →  preset: stres
-    4  →  preset: kantuk
+    1  →  preset: calm
+    2  →  preset: tense
     q  →  quit
     +/-  →  naik/turun alpha
     w/s  →  naik/turun beta
@@ -298,28 +296,34 @@ FOCUS_CLIMAX_PHRASE = [
 
 @dataclass
 class EEGState:
-    delta: float = 0.4   # 0–1, tidur dalam / drowsy
     alpha: float = 0.5   # 0–1, rileks/flow
     beta:  float = 0.3   # 0–1, fokus/stres
     theta: float = 0.2   # 0–1, kantuk/meditasi
+    tbr:     float = 0.5   # Theta/Beta Ratio (frontal) — normalized 0=focused, 1=drowsy
+    tbr_raw: float = 1.0   # Raw theta/beta power ratio — tidak terpengaruh adaptive normalize
 
     def mental_state(self) -> str:
-        b, a, t = self.beta, self.alpha, self.theta
-        # Stress: butuh beta DAN theta tinggi — jangan mudah trigger saat focus
-        if b > 0.70 and t > 0.62:  return "stress"
-        # Focus: beta moderat-tinggi, alpha tidak dominan
-        if b > 0.52 and a < 0.45:  return "focus"
-        if a > 0.55 and b < 0.4:   return "relax"
-        if t > 0.65:                return "drowsy"
-        # Fallback: beta di atas rata-rata → masih lebih focus dari relax
-        if b > 0.40:                return "focus"
-        return "relax"
+        # Drowsy override — pakai raw TBR supaya tidak tertipu adaptive normalization.
+        # Setelah ngantuk 10+ menit, TBR ternormalisasi ke ~0.5 (jadi "normal baru").
+        # Raw TBR > 2.0 artinya theta 2× beta secara absolut — reliably drowsy.
+        # tbr > 0.45 diturunkan dari 0.55 karena normalizer bisa drift saat lama merem.
+        # beta < 0.25 = sangat rendah (hampir ketiduran) → paksa calm meski alpha ikut turun.
+        if (self.tbr_raw > 2.0
+                or (self.tbr > 0.45 and self.beta < 0.45)
+                or self.beta < 0.25):
+            return "calm"
+        # Binary 2-class — weighted arousal index
+        # Beta dinaikkan (0.50) agar cognitive load sedang (Sudoku, fokus) bisa trigger tense.
+        # TBR diturunkan (0.25) — drowsy sudah dilindungi guard di atas, tidak perlu besar.
+        # Dead zone dikecilkan ke 0.02 — masih filter pure noise, tapi tidak terlalu ketat.
+        arousal = 0.50 * self.beta - 0.25 * self.alpha - 0.25 * self.tbr
+        return "tense" if arousal > 0.02 else "calm"
 
     def clamp(self):
-        self.delta = max(0.0, min(1.0, self.delta))
         self.alpha = max(0.0, min(1.0, self.alpha))
         self.beta  = max(0.0, min(1.0, self.beta))
         self.theta = max(0.0, min(1.0, self.theta))
+        self.tbr   = max(0.0, min(1.0, self.tbr))
 
 
 # ── music engine ──────────────────────────────────────────────────────────────
@@ -341,14 +345,14 @@ class MusicEngine:
         self._setup_channels()
 
         # State tracking
-        self._chord_idx = 0
-        self._ost_step  = 0
-        self._drum_step = 0
-        self._build_level  = 0.0      # fokus tension build (0→1)
-        self._stress_build = 0.0      # stress escalation build (0→1)
+        self._chord_idx   = 0
+        self._ost_step    = 0
+        self._drum_step   = 0
+        self._tense_level = 0.0       # arousal build-up: 0=calm baseline, 1=peak tense
         self._prev_state  = None
-        self._state_votes  = deque(maxlen=16)  # vote buffer ~2s @120BPM (8 tick/s)
-        self._glitch_cooldown = 0
+        self._state_votes  = deque(maxlen=12)  # 12 ticks ~1.7 s @72 BPM calm, ~1.1 s @130 BPM tense
+        self._glitch_cooldown    = 0
+        self._pending_transition = None  # (prev, curr) — bar-locked, tunggu t%16==0
 
         # Timing
         self._tick = 0               # 16th note counter
@@ -380,16 +384,36 @@ class MusicEngine:
 
     # ── public API ─────────────────────────────────────────────────────────
 
-    def set_eeg(self, alpha: float, beta: float, theta: float, delta: float = 0.4):
-        """Update nilai EEG. Ini yang nanti dipanggil dari BrainFlow."""
+    def set_eeg(self, alpha: float, beta: float, theta: float,
+                tbr: float = 0.5, tbr_raw: float = 1.0):
+        """Update nilai EEG. Dipanggil dari MuseConnector setiap ~1 detik."""
         with self._lock:
-            self.eeg.delta = delta
-            self.eeg.alpha = alpha
-            self.eeg.beta  = beta
-            self.eeg.theta = theta
+            self.eeg.alpha   = alpha
+            self.eeg.beta    = beta
+            self.eeg.theta   = theta
+            self.eeg.tbr     = tbr
+            self.eeg.tbr_raw = tbr_raw
             self.eeg.clamp()
 
+    def get_arousal(self) -> float:
+        """Raw arousal index — positif=tense, negatif=calm. Berguna untuk debug."""
+        return round(0.45 * self.eeg.beta - 0.25 * self.eeg.alpha - 0.30 * self.eeg.tbr, 4)
+
+    def get_confidence(self) -> float:
+        """Seberapa jauh dari ambang batas 0.0 (0=borderline, 1=sangat yakin).
+        Normalisasi ke ±0.08 — disesuaikan dengan range arousal Muse 2 frontal."""
+        return min(1.0, abs(self.get_arousal()) / 0.08)
+
+    def get_consistency(self) -> float:
+        """Seberapa konsisten vote buffer (0.5=50/50, 1.0=bulat satu state)."""
+        if not self._state_votes:
+            return 0.0
+        top = Counter(self._state_votes).most_common(1)[0][1]
+        return round(top / len(self._state_votes), 3)
+
     def start(self):
+        if self._running:
+            return  # cegah double-start saat reconnect
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -412,15 +436,30 @@ class MusicEngine:
                     eeg = EEGState(
                         alpha=self.eeg.alpha,
                         beta=self.eeg.beta,
-                        theta=self.eeg.theta
+                        theta=self.eeg.theta,
+                        tbr=self.eeg.tbr,
+                        tbr_raw=self.eeg.tbr_raw,
                     )
 
-                # ── State smoothing: vote buffer mencegah loncat-loncat ──
-                # raw_state dihitung dari nilai EEG sesaat, bisa flicker.
-                # state (smooth) = mayoritas dari 16 tick terakhir (~2 detik).
+                # ── State smoothing: asymmetric vote buffer ───────────────
+                # EMG artifact sudah diblok di connector (pass 1 frontal scan).
+                # Buffer lebih kecil (12 tick) dan threshold lebih rendah → responsif.
+                #
+                # Masuk tense : butuh 9/12 = 75% → harus sustained ~2.5 s @72 BPM
+                # Keluar tense: butuh 4/12 = 33% calm → relaks cukup cepat
                 raw_state = eeg.mental_state()
                 self._state_votes.append(raw_state)
-                state = Counter(self._state_votes).most_common(1)[0][0]
+                total  = len(self._state_votes)
+                counts = Counter(self._state_votes)
+                current = self._prev_state or "calm"
+                if current == "tense":
+                    # Mudah keluar: 4/12 calm sudah cukup
+                    calm_count = counts.get("calm", 0)
+                    state = "calm" if calm_count >= max(1, int(total * 0.334)) else "tense"
+                else:
+                    # Masuk tense: butuh 8/12 (67%) — cukup ketat untuk noise, cukup responsif
+                    tense_count = counts.get("tense", 0)
+                    state = "tense" if tense_count >= max(1, int(total * 0.667)) else "calm"
                 self._update_build_level(state)
                 self._update_bpm(state, eeg)
                 self._update_mixing(state, eeg)
@@ -439,119 +478,104 @@ class MusicEngine:
                 time.sleep(0.1)  # jangan tight-loop jika terus error
 
     def _tick_event(self, state: str, eeg: EEGState):
-        t = self._tick
+        t   = self._tick
+        lvl = self._tense_level
+
+        # ── Bar-locked transition ─────────────────────────────────────────
+        # Eksekusi di half-bar (t%8==0) — musikal dan lebih responsif dari full bar
+        if self._pending_transition and t % 8 == 0:
+            prev_t, curr_t = self._pending_transition
+            self._pending_transition = None
+            self._on_state_change(prev_t, curr_t)
 
         # ── Chord / pad ───────────────────────────────────────────────────
-        # Stres: stab setiap quarter note (agresif, rhythmic)
-        # Lainnya: sustain setiap 1 bar
-        if state == "stress":
+        # Tense tinggi: stab setiap quarter note (agresif, rhythmic)
+        # Semua lain: sustain setiap 1 bar
+        if state == "tense" and lvl > 0.55:
             if t % 4 == 0:
                 self._play_chord(state, eeg)
         elif t % 16 == 0:
             self._play_chord(state, eeg)
 
-        # ── String ostinato — setiap 16th note (fokus only) ──────────────
-        if state == "focus":
+        # ── String ostinato — 16th note (tense, setelah build cukup) ──────
+        if state == "tense" and lvl > 0.25:
             self._play_ostinato(eeg)
 
         # ── Bass ──────────────────────────────────────────────────────────
-        # Stres: 8th note (2 ticks) — relentless pulse
-        # Kantuk: half note (8 ticks) — sparse
-        # Lainnya: quarter note (4 ticks)
-        bass_interval = 8 if state == "drowsy" else (2 if state == "stress" else 4)
+        # Calm: half note (8 ticks) — sparse
+        # Tense low: quarter note (4 ticks)
+        # Tense high: 8th note (2 ticks) — relentless
+        if state == "calm":
+            bass_interval = 8
+        elif lvl > 0.55:
+            bass_interval = 2
+        else:
+            bass_interval = 4
         if t % bass_interval == 0:
             self._play_bass(state)
 
-        # ── Melody / choir filler — setiap half bar ───────────────────────
-        if t % 8 == 0 and state in ("relax", "drowsy"):
-            self._play_melody_fill(state, eeg)
+        # ── Melody / pad filler — calm ────────────────────────────────────
+        if t % 8 == 0 and state == "calm":
+            self._play_melody_fill(eeg)
 
-        # ── Brass swell (fokus) — masuk saat build tinggi ─────────────────
-        if state == "focus" and t % 8 == 0 and self._build_level > 0.4:
+        # ── Brass swell (tense) — masuk saat build tinggi ─────────────────
+        if state == "tense" and t % 8 == 0 and lvl > 0.4:
             self._play_brass_swell()
 
-        # ── Drums (fokus) ─────────────────────────────────────────────────
-        if state == "focus":
-            step = t % 16
-            if FOCUS_KICK_PATTERN[step]:
-                vel = int(85 + self._build_level * 30)
+        # ── Drums ─────────────────────────────────────────────────────────
+        # Mulai saat tense_level > 0.3; escalate ke stress pattern saat > 0.55
+        if state == "tense" and lvl >= 0.3:
+            step     = t % 16
+            kick_p   = STRESS_KICK_PATTERN  if lvl > 0.55 else FOCUS_KICK_PATTERN
+            snare_p  = STRESS_SNARE_PATTERN if lvl > 0.55 else FOCUS_SNARE_PATTERN
+            hihat_p  = STRESS_HIHAT_PATTERN if lvl > 0.55 else FOCUS_HIHAT_PATTERN
+            if kick_p[step]:
+                vel = min(127, int(85 + lvl * 30))
                 self.fs.noteon(CH["drums"], 36, vel)
                 threading.Timer(0.05, lambda: self.fs.noteoff(CH["drums"], 36)).start()
-            if FOCUS_SNARE_PATTERN[step]:
-                vel = int(70 + self._build_level * 25)
+            if snare_p[step]:
+                vel = min(127, int(70 + lvl * 30))
                 self.fs.noteon(CH["drums"], 38, vel)
                 threading.Timer(0.05, lambda: self.fs.noteoff(CH["drums"], 38)).start()
-            if FOCUS_HIHAT_PATTERN[step]:
-                vel = int(50 + self._build_level * 20)
-                self.fs.noteon(CH["drums"], 42, vel)
-                threading.Timer(0.03, lambda: self.fs.noteoff(CH["drums"], 42)).start()
-
-        # ── Drums (stres) — pattern relentless seperti game boss fight ────
-        if state == "stress":
-            step = t % 16
-            intensity = min(1.0, eeg.beta * 0.7 + eeg.theta * 0.3)
-            build_boost = int(self._stress_build * 18)
-            if STRESS_KICK_PATTERN[step]:
-                vel = min(127, int(90 + intensity * 25) + build_boost)
-                self.fs.noteon(CH["drums"], 36, vel)
-                threading.Timer(0.05, lambda: self.fs.noteoff(CH["drums"], 36)).start()
-            if STRESS_SNARE_PATTERN[step]:
-                vel = min(127, int(75 + intensity * 30) + build_boost)
-                self.fs.noteon(CH["drums"], 38, vel)
-                threading.Timer(0.06, lambda: self.fs.noteoff(CH["drums"], 38)).start()
-            if STRESS_HIHAT_PATTERN[step]:
-                # Hihat 16th relentless, velocity sedikit variatif
-                vel = min(127, int(50 + intensity * 20) + (15 if step % 4 == 0 else 0) + build_boost // 2)
+            if hihat_p[step]:
+                vel = min(127, int(50 + lvl * 25) + (15 if step % 4 == 0 else 0))
                 self.fs.noteon(CH["drums"], 42, vel)
                 threading.Timer(0.025, lambda: self.fs.noteoff(CH["drums"], 42)).start()
 
-        # ── Melodi stres — motif pendek, gelisah (synth lead) ────────────
-        if state == "stress" and t % 2 == 0:
-            self._play_stress_melody(eeg)
+        # ── Tense climax ─────────────────────────────────────────────────
+        if state == "tense" and t % 4 == 0:
+            self._play_tense_climax()
 
-        # ── Stress climax — brass stab disonan saat stress build puncak ───
-        if state == "stress" and t % 4 == 0:
-            self._play_stress_climax()
-
-        # ── Glitch (stres) — sebagai aksen, probabilitas naik seiring build ─
-        if state == "stress" and random.random() < (0.20 + self._stress_build * 0.40):
+        # ── Glitch (tense high) ───────────────────────────────────────────
+        if state == "tense" and lvl > 0.65 and random.random() < (0.20 + lvl * 0.40):
             self._play_glitch(eeg)
 
-        # ── Focus climax — choir line saat build puncak (>0.7) ───────────
-        if state == "focus" and t % 4 == 0:
-            self._play_focus_climax()
-
-        # ── Drowsy breathing — pad swell ──────────────────────────────────
-        if state == "drowsy":
-            self._play_drowsy_breathing()
+        # ── Calm breathing — pad swell ────────────────────────────────────
+        if state == "calm":
+            self._play_calm_breathing()
 
         self._ost_step += 1
 
     # ── layer players ──────────────────────────────────────────────────────
 
     def _play_chord(self, state: str, eeg: EEGState):
-        progs = {
-            "focus":  FOCUS_PROGRESSIONS,
-            "relax":  RELAX_PROGRESSIONS,
-            "stress": STRESS_PROGRESSIONS,
-            "drowsy": DROWSY_PROGRESSIONS,
-        }
-        prog = progs[state]
+        lvl = self._tense_level
+        if state == "calm":
+            prog = RELAX_PROGRESSIONS
+        elif lvl > 0.55:
+            prog = STRESS_PROGRESSIONS
+        else:
+            prog = FOCUS_PROGRESSIONS
         chord = prog[self._chord_idx % len(prog)]
         self._chord_idx += 1
 
-        dur_sec = (60.0 / self._bpm) * 4.0  # 1 bar
-        # Stres: chord stab pendek dan punchy (quarter note), bukan sustain
-        if state == "stress":
+        # Tense tinggi: stab pendek; semua lain: sustain penuh
+        if state == "tense" and lvl > 0.55:
             dur_sec = (60.0 / self._bpm) * 0.3
+        else:
+            dur_sec = (60.0 / self._bpm) * 4.0
 
-        # Strings pad — selalu ada
-        str_vel = {
-            "focus":  int(55 + self._build_level * 40),
-            "relax":  55,   # lembut — tidak menghantam
-            "stress": int(70 + self._stress_build * 35),  # makin keras seiring build
-            "drowsy": 50,
-        }[state]
+        str_vel = int(55 + (lvl * 60 if state == "tense" else 0))  # 55 calm → 55-115 tense
 
         for n in chord:
             self.fs.noteon(CH["strings"], n, str_vel)
@@ -559,8 +583,8 @@ class MusicEngine:
             lambda chord=chord: [self.fs.noteoff(CH["strings"], n) for n in chord]
         ).start()
 
-        # Strings2 harmony (fokus & rileks)
-        if state in ("focus", "relax"):
+        # Strings2 harmony — calm & mild tense only
+        if state == "calm" or lvl < 0.55:
             upper = [n + 12 for n in chord[:2]]
             vel2 = int(str_vel * 0.65)
             for n in upper:
@@ -569,27 +593,13 @@ class MusicEngine:
                 lambda upper=upper: [self.fs.noteoff(CH["strings2"], n) for n in upper]
             ).start()
 
-        # Pad (rileks & kantuk) — catatan: satu oktaf bawah, tapi rileks pakai root saja
-        if state in ("relax", "drowsy"):
-            if state == "relax":
-                # Rileks: hanya root & fifth satu oktaf bawah, velocity sangat lembut
-                pad_notes = [chord[0] - 12, chord[2] - 12] if len(chord) >= 3 else [chord[0] - 12]
-                pad_vel = 38
-            else:
-                pad_notes = [n - 12 for n in chord]
-                pad_vel = 45
+        # Pad — calm only (root & fifth, sangat lembut)
+        if state == "calm":
+            pad_notes = [chord[0] - 12, chord[2] - 12] if len(chord) >= 3 else [chord[0] - 12]
             for n in pad_notes:
-                self.fs.noteon(CH["pad"], n, pad_vel)
+                self.fs.noteon(CH["pad"], n, 38)
             threading.Timer(dur_sec,
                 lambda pad_notes=pad_notes: [self.fs.noteoff(CH["pad"], n) for n in pad_notes]
-            ).start()
-
-        # Choir (rileks, sangat subtle — hanya sesekali)
-        if state == "relax" and random.random() < 0.15:
-            for n in chord[:2]:
-                self.fs.noteon(CH["choir"], n, 32)
-            threading.Timer(dur_sec * 0.8,
-                lambda chord=chord: [self.fs.noteoff(CH["choir"], n) for n in chord[:2]]
             ).start()
 
     def _play_ostinato(self, eeg: EEGState):
@@ -599,7 +609,7 @@ class MusicEngine:
 
         # Humanize sedikit — velocity variatif tapi teratur
         accent = step % 4 == 0  # aksen di beat
-        vel_base = 70 + int(self._build_level * 35)
+        vel_base = 70 + int(self._tense_level * 35)
         vel = vel_base + (15 if accent else 0) + random.randint(-5, 5)
         vel = max(40, min(127, vel))
 
@@ -610,28 +620,23 @@ class MusicEngine:
         ).start()
 
     def _play_bass(self, state: str):
-        progs = {
-            "focus":  FOCUS_PROGRESSIONS,
-            "relax":  RELAX_PROGRESSIONS,
-            "stress": STRESS_PROGRESSIONS,
-            "drowsy": DROWSY_PROGRESSIONS,
-        }
-        chord = progs[state][self._chord_idx % len(progs[state])]
-        bass_note = chord[0] - 12  # root, satu oktaf bawah
-        bass_note = max(24, bass_note)  # jangan terlalu rendah
-
-        vel = {
-            "focus":  int(75 + self._build_level * 25),
-            "relax":  60,
-            "stress": min(127, int(95 + self._stress_build * 22)),
-            "drowsy": 45,
-        }.get(state, 70)
-
-        # Stres: staccato pendek (seperti pulse bass game)
-        if state == "stress":
-            dur_sec = (60.0 / self._bpm) * 0.18
+        lvl = self._tense_level
+        if state == "calm":
+            prog = RELAX_PROGRESSIONS
+        elif lvl > 0.55:
+            prog = STRESS_PROGRESSIONS
         else:
+            prog = FOCUS_PROGRESSIONS
+        chord     = prog[self._chord_idx % len(prog)]
+        bass_note = max(24, chord[0] - 12)
+
+        if state == "calm":
+            vel     = 60
             dur_sec = (60.0 / self._bpm) * 0.8
+        else:  # tense
+            vel     = int(75 + lvl * 35)
+            dur_sec = (60.0 / self._bpm) * (0.18 if lvl > 0.55 else 0.8)
+
         self.fs.noteon(CH["bass"], bass_note, vel)
         threading.Timer(dur_sec,
             lambda: self.fs.noteoff(CH["bass"], bass_note)
@@ -639,11 +644,11 @@ class MusicEngine:
 
     def _play_brass_swell(self):
         """Brass masuk perlahan saat tension build-up tinggi."""
-        if self._build_level < 0.4:
+        if self._tense_level < 0.4:
             return
         chord = FOCUS_PROGRESSIONS[self._chord_idx % len(FOCUS_PROGRESSIONS)]
         upper = [n + 7 for n in chord[:2]]  # fifth up
-        vel = int(40 + self._build_level * 55)
+        vel = int(40 + self._tense_level * 55)
         dur_sec = (60.0 / self._bpm) * 2.0
 
         for n in upper:
@@ -653,34 +658,17 @@ class MusicEngine:
             lambda upper=upper: [self.fs.noteoff(CH["brass"], n) for n in upper]
         ).start()
 
-    def _play_melody_fill(self, state: str, eeg: EEGState):
-        """Melody filler untuk rileks/kantuk — sesekali saja."""
-        # Probabilitas berbeda: rileks lebih aktif, kantuk sangat jarang
-        prob = {"relax": 0.65, "drowsy": 0.30}.get(state, 0.55)
-        if random.random() > prob:
+    def _play_melody_fill(self, eeg: EEGState):
+        """Melody filler untuk calm — sesekali saja."""
+        if random.random() > 0.55:
             return
-        scales = {
-            # Rileks: C major pentatonic + 7th — lapang, damai
-            "relax": [note("C5"), note("E5"), note("G5"), note("A5"),
-                      note("B5"), note("D5"), note("C6")],
-            # Kantuk: lebih rendah dan sedikit — berat, mengantuk
-            "drowsy": [note("C4"), note("G4"), note("B4"),
-                       note("D5"), note("F4")],
-        }
-        scale = scales.get(state, scales["relax"])
-        n = random.choice(scale)
-
-        # Kantuk: pelan dan panjang (dreamy sustain), rileks: medium
-        if state == "drowsy":
-            vel = random.randint(28, 48)
-            dur_sec = (60.0 / self._bpm) * random.choice([1.5, 2.0, 3.0])
-        else:
-            vel = random.randint(45, 68)
-            dur_sec = (60.0 / self._bpm) * random.choice([0.5, 1.0, 1.5, 2.0])
-
-        ch = CH["choir"] if state == "drowsy" else CH["melody"]
-        self.fs.noteon(ch, n, vel)
-        threading.Timer(dur_sec, lambda: self.fs.noteoff(ch, n)).start()
+        scale = [note("C5"), note("E5"), note("G5"), note("A5"),
+                 note("B5"), note("D5"), note("C6")]
+        n       = random.choice(scale)
+        vel     = random.randint(42, 68)
+        dur_sec = (60.0 / self._bpm) * random.choice([0.5, 1.0, 1.5, 2.0])
+        self.fs.noteon(CH["melody"], n, vel)
+        threading.Timer(dur_sec, lambda: self.fs.noteoff(CH["melody"], n)).start()
 
     def _play_stress_melody(self, eeg: EEGState):
         """Motif melodi pendek dan gelisah pada synth lead — game danger feel."""
@@ -739,24 +727,38 @@ class MusicEngine:
             self.fs.noteon(CH["drums"], 46, vel)
             threading.Timer(0.12, lambda: self.fs.noteoff(CH["drums"], 46)).start()
 
-    def _play_drowsy_breathing(self):
-        """Efek 'nafas' pada pad/choir — swell perlahan masuk dan keluar."""
-        # CC 11 (Expression) bersiklus menggunakan gelombang cosinus
-        phase = (self._tick % 48) / 48.0          # siklus ~3 bar
-        expr = int(40 + 55 * (0.5 - 0.5 * math.cos(2 * math.pi * phase)))
-        self.fs.cc(CH["pad"], 11, expr)
+    def _play_calm_breathing(self):
+        """Efek 'nafas' pada pad saat calm — swell perlahan CC11."""
+        phase = (self._tick % 48) / 48.0
+        expr  = int(35 + 55 * (0.5 - 0.5 * math.cos(2 * math.pi * phase)))
+        self.fs.cc(CH["pad"],   11, expr)
         self.fs.cc(CH["choir"], 11, expr)
 
-    def _play_focus_climax(self):
-        """Melodi choir ascending saat build sangat tinggi (>0.7) — klimaks."""
-        if self._build_level < 0.7:
+    def _play_tense_climax(self):
+        """Climax saat tense level tinggi: choir ascending (medium), brass stab (puncak)."""
+        lvl = self._tense_level
+        if lvl < 0.65:
             return
-        step = (self._tick // 4) % len(FOCUS_CLIMAX_PHRASE)
-        n = FOCUS_CLIMAX_PHRASE[step]
-        vel = int(55 + self._build_level * 45)   # 55–100
-        dur_sec = (60.0 / self._bpm) * 0.85
-        self.fs.noteon(CH["choir"], n, vel)
-        threading.Timer(dur_sec, lambda: self.fs.noteoff(CH["choir"], n)).start()
+        if lvl >= 0.85:
+            # Sangat tense: brass stab disonan
+            chord   = STRESS_PROGRESSIONS[self._chord_idx % len(STRESS_PROGRESSIONS)]
+            stab    = [chord[0], chord[0] + 1, chord[0] + 6]
+            vel     = int(60 + lvl * 55)
+            dur_sec = (60.0 / self._bpm) * 0.20
+            for n in stab:
+                if 0 <= n <= 127:
+                    self.fs.noteon(CH["brass"], n, vel)
+            threading.Timer(dur_sec,
+                lambda stab=stab: [self.fs.noteoff(CH["brass"], n) for n in stab]
+            ).start()
+        else:
+            # Moderately tense: choir ascending phrase
+            step    = (self._tick // 4) % len(FOCUS_CLIMAX_PHRASE)
+            n       = FOCUS_CLIMAX_PHRASE[step]
+            vel     = int(55 + lvl * 45)
+            dur_sec = (60.0 / self._bpm) * 0.85
+            self.fs.noteon(CH["choir"], n, vel)
+            threading.Timer(dur_sec, lambda: self.fs.noteoff(CH["choir"], n)).start()
 
     def _play_glitch(self, eeg: EEGState):
         """
@@ -838,78 +840,65 @@ class MusicEngine:
     # ── state management ───────────────────────────────────────────────────
 
     def _update_build_level(self, state: str):
-        """Fokus tension naik perlahan, turun lambat saat state berubah."""
-        if state == "focus":
-            self._build_level = min(1.0, self._build_level + 0.005)
+        """tense_level naik perlahan saat tense, turun saat calm."""
+        if state == "tense":
+            self._tense_level = min(1.0, self._tense_level + 0.005)
         else:
-            self._build_level = max(0.0, self._build_level - 0.003)
-
-        if state == "stress":
-            self._stress_build = min(1.0, self._stress_build + 0.005)
-        else:
-            self._stress_build = max(0.0, self._stress_build - 0.003)
+            self._tense_level = max(0.0, self._tense_level - 0.003)
 
         if state != self._prev_state and self._prev_state is not None:
-            self._on_state_change(self._prev_state, state)
+            # Bar-lock: simpan pending, eksekusi di t%16==0 pada _tick_event
+            self._pending_transition = (self._prev_state, state)
         self._prev_state = state
 
     def _on_state_change(self, prev: str, curr: str):
-        """Transisi antar state — flush note yang sedang berbunyi."""
+        """Transisi antar state — bar-locked, fluent."""
         print(f"  → state berubah: {prev} → {curr}")
-        # Bersihkan channel melodis agar tidak ada note stuck
+
+        # Melody/choir/glitch selalu di-cut (tidak terdengar kasar karena pendek)
         self._all_notes_off(channels=[CH["melody"], CH["choir"], CH["glitch"]])
-        if prev == "stress":
-            self._all_notes_off()   # Cut total dari stress — transisi bersih
-        # Ganti instrumen melody sesuai karakter state
+
+        # Tense → calm: cut drums juga, tapi biarkan strings/bass decay natural
+        # (TIDAK full all_notes_off — strings sustain ke calm terdengar lebih halus)
+        if prev == "tense":
+            self._all_notes_off(channels=[CH["drums"]])
+
+        # Reset chord index → mulai dari awal progressi yang benar
+        self._chord_idx = 0
+
+        # Snap BPM 60% ke target baru supaya terasa langsung
+        if curr == "tense":
+            target_snap = 80 + self._tense_level * 50
+        else:  # calm
+            target_snap = 60.0
+        self._bpm += (target_snap - self._bpm) * 0.60
         self._switch_instruments(curr)
 
     def _switch_instruments(self, state: str):
-        """Ganti instrumen channel melody sesuai state.
-
-        Menggunakan pad/synth agar cocok dengan VintageDreamsWaves maupun GM orkestra.
-        VintageDreamsWaves: pad (88-95) dan synth lead (80-87) adalah strong points-nya.
-        GM orkestra (GeneralUser GS, FluidR3): semua GM number akan berbunyi natural.
-        """
-        melody_instruments = {
-            "focus":  GM["synth_lead"],  # 80 – synth lead square: tegang, driving
-            "relax":  GM["pad_warm"],    # 89 – warm pad: lembut, mengalir
-            "stress": GM["synth_lead"],  # 80 – harsh synth: agresif
-            "drowsy": GM["pad_bowed"],   # 92 – bowed pad: dreamy, mengambang
-        }
-        prog = melody_instruments.get(state, GM["pad_warm"])
-        self.fs.program_select(CH["melody"], self.sfid, 0, prog)
-        # Rileks: pad dan choir pakai warm pad (bukan choir pad yang terdengar horor)
-        if state == "relax":
-            self.fs.program_select(CH["pad"],   self.sfid, 0, GM["pad_warm"])
-            self.fs.program_select(CH["choir"], self.sfid, 0, GM["pad_warm"])
-        elif state == "drowsy":
-            self.fs.program_select(CH["pad"],   self.sfid, 0, GM["pad_choir"])
-            self.fs.program_select(CH["choir"], self.sfid, 0, GM["pad_choir"])
+        """Ganti instrumen channel melody sesuai state (calm / tense)."""
+        if state == "tense":
+            self.fs.program_select(CH["melody"], self.sfid, 0, GM["synth_lead"])  # tegang
+        else:  # calm
+            self.fs.program_select(CH["melody"], self.sfid, 0, GM["pad_warm"])
+            self.fs.program_select(CH["pad"],    self.sfid, 0, GM["pad_warm"])
+            self.fs.program_select(CH["choir"],  self.sfid, 0, GM["pad_warm"])
 
     def _update_bpm(self, state: str, eeg: EEGState):
-        target_bpm = {
-            "focus":  80 + self._build_level * 15,   # 80→95 seiring build
-            "relax":  55 + eeg.alpha * 10,            # 55→65 (lebih rileks)
-            "stress": 110 + eeg.beta * 18 + self._stress_build * 22,  # 110→150 seiring build
-            "drowsy": 45 + eeg.theta * 8,             # 45→53 (lebih lambat)
-        }[state]
-        # Smooth BPM transition
-        self._bpm += (target_bpm - self._bpm) * 0.01
+        if state == "calm":
+            target_bpm = 55 + eeg.alpha * 10          # 55→65 seiring alpha
+        else:  # tense
+            target_bpm = 80 + self._tense_level * 50  # 80→130 seiring tense
+        self._bpm += (target_bpm - self._bpm) * 0.05  # 0.01→0.05: ~6 detik konvergen
 
     def _update_mixing(self, state: str, eeg: EEGState):
-        """Update reverb & volume sesuai state."""
-        reverb_params = {
-            "focus":  {"roomsize": 0.45, "damping": 0.6, "level": 0.35},  # dry, tight
-            "relax":  {"roomsize": 0.75, "damping": 0.5, "level": 0.55},  # warm hall
-            "stress": {"roomsize": 0.10, "damping": 0.8, "level": 0.10},  # almost dry
-            "drowsy": {"roomsize": 0.85, "damping": 0.3, "level": 0.65},  # deep, floaty
-        }[state]
-        self.fs.set_reverb(
-            roomsize=reverb_params["roomsize"],
-            damping=reverb_params["damping"],
-            width=0.8,
-            level=reverb_params["level"]
-        )
+        """Update reverb sesuai state — calm: warm hall, tense: tightens with level."""
+        if state == "calm":
+            self.fs.set_reverb(roomsize=0.75, damping=0.5, width=0.8, level=0.55)
+        else:  # tense — ruangan semakin kering seiring tense_level
+            lvl = self._tense_level
+            rs  = max(0.08, 0.45 - lvl * 0.37)
+            lv  = max(0.08, 0.35 - lvl * 0.27)
+            self.fs.set_reverb(roomsize=rs, damping=0.7 + lvl * 0.1, width=0.8, level=lv)
 
     def _all_notes_off(self, channels: Optional[list] = None):
         chs = channels if channels else list(CH.values())
@@ -929,14 +918,12 @@ class MusicEngine:
 
 def display_status(eeg: EEGState, engine: MusicEngine):
     state = eeg.mental_state()
-    build = engine._build_level
+    lvl   = engine._tense_level
     bpm   = engine._bpm
 
     state_colors = {
-        "focus":  "\033[35m",   # magenta
-        "relax":  "\033[32m",   # green
-        "stress": "\033[31m",   # red
-        "drowsy": "\033[33m",   # yellow
+        "calm":  "\033[32m",   # green
+        "tense": "\033[35m",   # magenta
     }
     RESET = "\033[0m"
     BOLD  = "\033[1m"
@@ -946,7 +933,7 @@ def display_status(eeg: EEGState, engine: MusicEngine):
 
     os.system("clear")
     print(f"{BOLD}╔══════════════════════════════════════╗{RESET}")
-    print(f"{BOLD}║     EEG MUSIC ENGINE  —  v1.0        ║{RESET}")
+    print(f"{BOLD}║     EEG MUSIC ENGINE  —  v2.0        ║{RESET}")
     print(f"{BOLD}╚══════════════════════════════════════╝{RESET}")
     print()
     print(f"  STATE   {col}{BOLD}{state.upper():10}{RESET}   BPM: {bpm:.1f}")
@@ -954,11 +941,11 @@ def display_status(eeg: EEGState, engine: MusicEngine):
     print(f"  alpha   {bar(eeg.alpha)}  {eeg.alpha:.2f}")
     print(f"  beta    {bar(eeg.beta)}  {eeg.beta:.2f}")
     print(f"  theta   {bar(eeg.theta)}  {eeg.theta:.2f}")
-    if state == "focus":
-        print(f"\n  build   {bar(build)}  {build:.2f}  {'🔥' * int(build * 5)}")
+    print(f"  TBR     {bar(eeg.tbr)}  {eeg.tbr:.2f}")
+    print(f"\n  tense   {bar(lvl)}  {lvl:.2f}  {'🔴' * int(lvl * 5)}")
     print()
     print("  ─────────────────────────────────────")
-    print("  Preset:  1=rileks  2=fokus  3=stres  4=kantuk")
+    print("  Preset:  1=calm  2=tense")
     print("  Manual:  α: +/─    β: w/s    θ: e/d")
     print("  Quit:    q")
     print()
@@ -1003,13 +990,9 @@ def main():
             if key == "q":
                 break
             elif key == "1":
-                engine.set_eeg(0.85, 0.10, 0.25)
+                engine.set_eeg(0.80, 0.15, 0.20, tbr=0.65)   # calm
             elif key == "2":
-                engine.set_eeg(0.10, 0.90, 0.08)
-            elif key == "3":
-                engine.set_eeg(0.05, 0.85, 0.80)
-            elif key == "4":
-                engine.set_eeg(0.20, 0.08, 0.90)
+                engine.set_eeg(0.20, 0.75, 0.30, tbr=0.30)   # tense
             elif key == "=":
                 engine.set_eeg(eeg.alpha + STEP, eeg.beta, eeg.theta)
             elif key == "-":

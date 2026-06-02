@@ -55,10 +55,8 @@ engine: MusicEngine = None
 muse:   "MuseConnector" = None  # type: ignore
 
 PRESETS = {
-    "relax":  (0.70, 0.20, 0.10),
-    "focus":  (0.20, 0.70, 0.10),
-    "stress": (0.15, 0.70, 0.60),
-    "drowsy": (0.20, 0.10, 0.70),
+    "calm":  (0.80, 0.15, 0.20),   # alpha, beta, theta
+    "tense": (0.20, 0.75, 0.30),
 }
 
 
@@ -93,7 +91,7 @@ def on_set_eeg(data):
 
 @socketio.on("set_preset")
 def on_set_preset(data):
-    name = data.get("preset", "relax")
+    name = data.get("preset", "calm")
     if name in PRESETS and engine:
         a, b, t = PRESETS[name]
         engine.set_eeg(a, b, t)
@@ -144,28 +142,36 @@ def on_muse_scan():
 def _background_updater():
     """Push engine state ke semua browser setiap 100ms."""
     while True:
-        if engine:
-            with engine._lock:
-                eeg   = engine.eeg
-                state = eeg.mental_state()
-                payload = {
-                    "state": state,
-                    "bpm":   round(engine._bpm, 1),
-                    "build": round(engine._build_level, 3),
-                    "stress_build": round(engine._stress_build, 3),
-                    "delta": round(eeg.delta, 3),
-                    "alpha": round(eeg.alpha, 3),
-                    "beta":  round(eeg.beta,  3),
-                    "theta": round(eeg.theta, 3),
-                    "delta_raw": round(muse.raw_bands["delta"], 2) if muse else None,
-                    "alpha_raw": round(muse.raw_bands["alpha"], 2) if muse else None,
-                    "beta_raw":  round(muse.raw_bands["beta"],  2) if muse else None,
-                    "theta_raw": round(muse.raw_bands["theta"], 2) if muse else None,
-                    "muse":  muse.status if muse else "unavailable",
-                    "heart_rate": muse.heart_rate if muse else None,
-                    "channel_quality": muse.channel_quality if muse else None,
-                }
-            socketio.emit("state_update", payload)
+        try:
+            if engine:
+                with engine._lock:
+                    eeg   = engine.eeg
+                    state = eeg.mental_state()
+                    payload = {
+                        "state": state,
+                        "bpm":   round(engine._bpm, 1),
+                        "tense_level": round(engine._tense_level, 3),
+                        "arousal":     round(engine.get_arousal(), 4),
+                        "confidence":  round(engine.get_confidence(), 3),
+                        "consistency": round(engine.get_consistency(), 3),
+                        "eeg_active":  engine._running,
+                        "alpha": round(eeg.alpha, 3),
+                        "beta":  round(eeg.beta,  3),
+                        "theta": round(eeg.theta, 3),
+                        "tbr":   round(eeg.tbr,   3),
+                        "alpha_raw": round(muse.raw_bands["alpha"], 2) if muse else None,
+                        "beta_raw":  round(muse.raw_bands["beta"],  2) if muse else None,
+                        "theta_raw": round(muse.raw_bands["theta"], 2) if muse else None,
+                        "alpha_hz": muse.peak_hz["alpha"] if muse else None,
+                        "beta_hz":  muse.peak_hz["beta"]  if muse else None,
+                        "theta_hz": muse.peak_hz["theta"] if muse else None,
+                        "muse":  muse.status if muse else "unavailable",
+                        "heart_rate": muse.heart_rate if muse else None,
+                        "channel_quality": muse.channel_quality if muse else None,
+                    }
+                socketio.emit("state_update", payload)
+        except Exception as e:
+            print(f"⚠️  _background_updater error: {e}")
         socketio.sleep(0.1)
 
 
@@ -182,12 +188,17 @@ def main():
 
     print("    Inisialisasi FluidSynth...")
     engine = MusicEngine(sf_path)
-    engine.start()
+    # Engine TIDAK langsung dimulai — musik hanya diputar saat Muse 2 terhubung
 
     # Inisialisasi Muse connector (jika brainflow terinstall)
     if BRAINFLOW_AVAILABLE and MuseConnector:
         def _muse_status_cb(status: str, error: str):
             socketio.emit("muse_status", {"status": status, "error": error})
+            if status == "connected" and engine:
+                engine.start()
+            elif status in ("disconnected", "error") and engine:
+                engine.stop()
+                engine.set_eeg(alpha=0.70, beta=0.20, theta=0.20, tbr=0.60)
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         print("✅  BrainFlow siap. Tekan 'Hubungkan Muse 2' di browser.")
     else:
