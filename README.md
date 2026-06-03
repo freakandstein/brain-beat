@@ -17,7 +17,7 @@ BrainFlow DataFilter — PSD Welch, band power θ/α/β
 Mental State Classifier — arousal = 0.50β − 0.25α − 0.25TBR
     ↓  Adaptive threshold (60s warm-up) + 12-tick vote buffer
 BrainBeat Drum Engine — FluidSynth GM ch9
-    ↓  CALM: brush jazz | TENSE: battle drums | STRESS: escalation
+    ↓  CALM: brush jazz (55–65 BPM) | TENSE: battle drums (95–135 BPM)
 Flask-SocketIO (port 8765) → Browser Overlay → OBS Browser Source
 ```
 
@@ -33,7 +33,8 @@ The system classifies two states in real-time:
 |---|---|---|---|
 | **CALM** | Alpha/theta dominant | Brush jazz — ride 8th, side stick 2&4, minimal kick | 55–65 |
 | **TENSE** | Beta dominant | Battle drums — constant 16th hi-hat, double kick, punchy snare | 95–135 |
-| **STRESS** | Tense + build > 65% | Double-time kick, snare + tom fill escalation | 110–135 |
+
+As tense duration increases, `tense_level` builds from 0 → 1, gradually escalating drum intensity (double-time kick, tom fills) within the TENSE state itself.
 
 **Arousal index:**
 ```
