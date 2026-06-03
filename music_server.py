@@ -1,11 +1,11 @@
 """
-EEG Music Engine — Web Server
-==============================
-Flask + SocketIO bridge antara music_engine dan browser UI.
+BrainBeat — Web Server
+=======================
+Flask + SocketIO bridge antara BrainBeat engine dan browser UI.
 
 Penggunaan:
     python music_server.py
-    Buka: http://localhost:5000
+    Buka: http://localhost:8765
 """
 
 import sys
@@ -95,6 +95,8 @@ def on_set_preset(data):
     if name in PRESETS and engine:
         a, b, t = PRESETS[name]
         engine.set_eeg(a, b, t)
+        if not engine._running:
+            engine.start()
         socketio.emit("preset_applied", {
             "preset": name, "alpha": a, "beta": b, "theta": t
         })
@@ -152,6 +154,8 @@ def _background_updater():
                         "bpm":   round(engine._bpm, 1),
                         "tense_level": round(engine._tense_level, 3),
                         "arousal":     round(engine.get_arousal(), 4),
+                        "threshold":   round(engine.get_threshold(), 4),
+                        "warming_up":  engine.is_warming_up(),
                         "confidence":  round(engine.get_confidence(), 3),
                         "consistency": round(engine.get_consistency(), 3),
                         "eeg_active":  engine._running,
@@ -182,7 +186,7 @@ def main():
 
     _kill_existing()
 
-    print("🎵  EEG Music Engine — Web UI")
+    print("🥁  BrainBeat — Web UI")
     print("    Mencari soundfont...")
     sf_path = find_or_download_soundfont()
 

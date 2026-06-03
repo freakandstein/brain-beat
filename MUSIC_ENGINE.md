@@ -1,19 +1,19 @@
-# EEG Music Engine
+# BrainBeat — EEG Drum Engine
 
-Generative music engine yang merespons nilai EEG (alpha/beta/theta) secara realtime.
-Musik berubah otomatis berdasarkan kondisi mental: fokus/rileks (calm) atau stres/tegang (tense).
+Generative drum engine yang merespons nilai EEG (alpha/beta/theta) secara realtime.
+Pola drum berubah otomatis berdasarkan mental state: calm (brush jazz) atau tense (battle drums).
 
 ## Arsitektur
 
 ```
-BrainFlow / Simulator
+Muse 2 (via muselsl + pylsl) / Simulator
         │
         ▼
-  music_engine.py      ← core engine (FluidSynth + MIDI generatif)
+  music_engine.py      ← BrainBeat core: FluidSynth drums-only (GM channel 9)
         │
   music_server.py      ← Flask + SocketIO bridge (port 8765)
         │
-  templates/index.html ← Web UI (OBS overlay-compatible)
+  templates/index.html ← Web UI "BRAIN BEAT MONITOR" (OBS overlay)
 ```
 
 ## EEG Bands
@@ -76,9 +76,10 @@ Buka browser: **http://localhost:8765**
 Browser UI (`templates/index.html`) menampilkan:
 
 **State Card (kiri)**
-- State aktif saat ini (FOCUS / RELAX / STRESS / DROWSY) dengan warna berbeda
+- State aktif saat ini (CALM / TENSE) dengan warna berbeda
 - BPM, HR (heart rate dari PPG), dan BUILD level numerik
-- Progress bar BUILD (focus momentum) dan TENSION (stress build)
+- Progress bar BUILD (tense momentum) dan TENSION level
+- WARMING UP indicator saat adaptive threshold belum terkalibrasi (60 detik pertama)
 
 **EEG Channel Map (kanan, di dalam state card)**
 - Diagram kepala SVG dengan 4 elektroda (TP9, AF7, AF8, TP10)
@@ -86,8 +87,8 @@ Browser UI (`templates/index.html`) menampilkan:
 - Label: **EEG CHANNEL MAP**
 
 **EEG Channels (canvas waveforms)**
-- 4 rolling waveform Canvas, urutan low→high: δ → θ → α → β
-- Warna: delta=oranye, theta=hijau, alpha=biru, beta=ungu
+- 3 rolling waveform Canvas: θ → α → β (delta dihapus)
+- Warna: theta=hijau, alpha=biru, beta=ungu
 - Y-axis: auto-scale per band (µV², 0 ke max dengan slow decay)
 - Nilai kanan: nilai saat ini dalam µV² (format: `158 µV²` / `3.95 µV²`)
 - Label Hz di nama band: `α alpha 8–13 Hz`
@@ -109,63 +110,53 @@ Sistem menggunakan **binary 2-class**: `calm` vs `tense`.
 arousal = 0.50 × beta − 0.25 × alpha − 0.25 × TBR
 ```
 
-**Tense** jika `arousal > 0.02` AND bertahan 8/12 tick (~1.5 detik)
-**Calm** jika `arousal ≤ 0.02` OR drowsy override aktif
+**Adaptive threshold** — bukan nilai hardcoded:
+- Selama 60 detik pertama (240 tick × 4 Hz) sistem **warm-up**, mengumpulkan sampel arousal ke buffer.
+- Setelah warm-up selesai, `threshold = median(buffer) + 0.02` — bias sedikit ke calm agar tidak over-tense.
+- Default sebelum warm-up selesai: `-0.05`.
+- `is_warming_up()` dan `get_threshold()` tersedia dari server untuk ditampilkan di UI.
 
-**Drowsy override** (paksa calm meski arousal positif):
+**Vote buffer** 12 tick — symmetric (50/50):
+| Transisi | Threshold |
+|---|---|
+| calm → tense | ≥ 50% vote tense |
+| tense → calm | ≥ 50% vote calm |
+
+### Pola Drum per State
+
+**CALM** — brush jazz, sparse (55–65 BPM)
 ```
-tbr_raw > 2.0           → theta 2× lebih besar dari beta secara absolut
-tbr_norm > 0.45 AND beta < 0.45  → normalized check
-beta < 0.25             → beta terlalu rendah, hampir ketiduran
+Ride     : [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]  → tiap 8th note
+Side Stick: [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]  → beat 2 & 4
+Kick      : [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]  → beat 1 saja
+Open HH   : [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,0]  → "and" of 4 (aksen lembut)
 ```
 
-**Asymmetric vote buffer** — masuk tense lebih sulit, keluar lebih mudah:
-| Transisi | Threshold | Waktu (~72 BPM) |
-|---|---|---|
-| calm → tense | 8/12 = 67% | ~1.5 detik |
-| tense → calm | 4/12 = 33% | ~0.8 detik |
+**TENSE** — battle drums, relentless (95–135 BPM)
+```
+Hi-Hat  : [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1]  → 16th constant
+Kick    : [1,0,0,0, 1,0,1,0, 1,0,0,0, 1,0,1,0]  → 4-on-floor + extra
+Snare   : [0,0,0,0, 1,0,0,1, 0,0,0,0, 1,0,0,1]  → beat 2&4 + ghost offbeat
+Open HH : [0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0]  → aksen offbeat
+```
 
-### Musik per State
+**STRESS** (tense_level > 0.65) — escalasi dari TENSE:
+```
+Kick ganda: [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]  → double-time kick
+Snare tambahan + tom fill otomatis
+```
 
-**Fokus** — Hans Zimmer / cinematic tension
-- String ostinato 16th note terus-menerus
-- Build level naik seiring durasi fokus (0 → 1 dalam ~2 menit)
-- Brass swell masuk saat build > 0.4, choir climax saat build > 0.7
-- BPM: 80 → 95 seiring build
-- Chord: Dm → Bb → F → C (minor, driving)
-- Reverb: dry dan tight
-
-**Rileks** — ambient / lo-fi peaceful
-- String pad lembut + melody fill sesekali (65% probabilitas)
-- Pad warm (bukan choir) di register menengah
-- Choir sangat jarang (15% probabilitas) dan pelan
-- BPM: 55 → 65
-- Chord: Cmaj7 → Fmaj7 → G → Am (major-leaning, hangat)
-- Reverb: warm hall (roomsize 0.75)
-
-**Stres** — game boss fight / intense action
-- Drum pattern relentless 16th note (kick / snare / hihat terus)
-- Bass pulse tiap 8th note, staccato
-- Chord stab tiap quarter note (punchy, tidak sustain)
-- Melodi motif chromatic pendek dan gelisah (synth lead)
-- Glitch engine sebagai aksen (25% probabilitas per tick)
-- BPM: 110 → 128
-- Chord: cluster disonan + tritone stack yang tidak resolve
-- Reverb: hampir dry
-
-**Kantuk** — dreamy / hypnagogic
-- Open fifth chord yang mengambang
-- Pad breathing (CC11 expression cycling cos wave)
-- Bass sangat jarang (tiap half note), velocity pelan
-- BPM: 45 → 53
-- Reverb: maksimal, floaty
+**tense_level** adalah momentum build-up (0.0 → 1.0):
+- Naik `+0.006` per tick saat tense
+- Turun `−0.004` per tick saat calm
+- BPM tense: `95 + tense_level × 40` (range 95–135 BPM)
 
 ### Timing
 
-Engine berjalan di loop 16th note. Setiap tick:
-- 1 tick = satu 16th note = `(60 / BPM) / 4` detik
-- Chord: setiap 16 tick (1 bar), kecuali stress setiap 4 tick
-- Drum pattern: 16 step loop
+Engine berjalan di loop 16th note (4 tick per beat):
+- 1 tick = `(60 / BPM) / 4` detik
+- Pattern drum: 16 step loop (= 1 bar 4/4)
+- Semua hit via `note_on` + auto-`note_off` setelah `dur` detik (thread terpisah)
 
 ## Integrasi Muse 2 (Aktif)
 

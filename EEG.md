@@ -4,10 +4,10 @@
 
 | Komponen | Status | Keterangan |
 |---|---|---|
-| **music_engine.py** | ✅ Selesai | Generative music via FluidSynth, binary calm/tense, bar-locked transitions, tense build-up level |
-| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/confidence/consistency + raw µV² + HR |
-| **Web UI (index.html)** | ✅ Selesai | OBS overlay — BPM, HR, BUILD bar, SIGNAL (confidence), CONS (consistency), EEG channel map, waveform Hz display |
-| **State detection** | ✅ Selesai | Binary calm/tense — weighted arousal index + raw TBR drowsy override + asymmetric vote buffer |
+| **music_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, binary calm/tense, adaptive threshold (60s warm-up), tense_level build-up |
+| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR |
+| **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar, SIGNAL, CONS, warming-up indicator, EEG channel map, waveform Hz display |
+| **State detection** | ✅ Selesai | Binary calm/tense — arousal index 0.50β−0.25α−0.25TBR + adaptive threshold (warm-up 60s) + symmetric vote buffer 12 tick |
 | **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
 | **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
 | **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
@@ -72,17 +72,11 @@ Sistem menggunakan **binary 2-class classifier**: `calm` vs `tense`.
 
 | State | Sinyal EEG | Logika Deteksi |
 |---|---|---|
-| **Tense / Aroused** | Beta dominan, alpha & TBR rendah | `arousal = 0.50·β − 0.25·α − 0.25·TBR > 0.02` |
-| **Calm / Relaxed** | Alpha/theta dominan, beta rendah | `arousal ≤ 0.02` — atau drowsy override aktif |
+| **Tense / Aroused** | Beta dominan, alpha & TBR rendah | `arousal = 0.50·β − 0.25·α − 0.25·TBR > threshold` |
+| **Calm / Relaxed** | Alpha/theta dominan, beta rendah | `arousal ≤ threshold` |
 
-**Drowsy override** (anti-misklasifikasi mengantuk sebagai tense):
-```
-tbr_raw > 2.0            → force calm  (theta 2× beta secara absolut)
-tbr_norm > 0.45 AND beta_norm < 0.45  → force calm  (normalized check)
-beta_norm < 0.25         → force calm  (beta sangat rendah = hampir tidur)
-```
-
-> **Kenapa dead zone 0.02?** Fluktuasi EEG minor selalu ada; arousal harus *jelas* positif untuk vote tense, bukan sekedar sedikit di atas nol.
+> **Threshold** bukan hardcoded — dikalibrasi otomatis via warm-up 60 detik pertama: `threshold = median(arousal_buffer) + 0.02`. Default sebelum kalibrasi: `-0.05`.
+> Bias `+0.02` agar engine tidak over-sensitif terhadap fluktuasi arousal minor.
 
 > Nilai alpha/beta/theta/TBR yang dikirim ke engine adalah **normalized 0–1** (rolling percentile p10–p90, window 60 sampel).
 > Raw band power dalam **µV²** dikirim ke UI terpisah.
@@ -92,14 +86,27 @@ beta_norm < 0.25         → force calm  (beta sangat rendah = hampir tidur)
 
 Nilai EEG mentah berfluktuasi setiap 16th note tick. Tanpa smoothing, state bisa loncat-loncat meski kondisi otak masih sama.
 
-**Mekanisme**: asymmetric vote buffer 12 tick — **masuk tense lebih ketat, keluar lebih mudah**.
+**Mekanisme**: symmetric vote buffer 12 tick — threshold 50% untuk kedua arah transisi.
 
 | Parameter | Nilai | Efek |
 |---|---|---|
 | Vote buffer size | 12 tick | ~1.5–2.5 detik tergantung BPM |
-| Masuk tense | ≥ 8/12 = 67% | Beta harus sustained ~1.5 detik |
-| Keluar tense | ≥ 4/12 = 33% calm | Relaks cepat begitu kondisi membaik |
+| calm → tense | ≥ 50% vote tense | Balanced — tidak over-sensitive |
+| tense → calm | ≥ 50% vote calm | Balanced — recovery proporsional |
 | Implementasi | `Counter(deque(maxlen=12))` | O(1) per tick |
+
+### Adaptive Threshold
+
+Threshold arousal bukan hardcoded — dikalibrasi otomatis dari sinyal tiap sesi:
+
+| Fase | Durasi | Behavior |
+|---|---|---|
+| **Warm-up** | 60 detik pertama (240 tick) | Kumpulkan sampel arousal, `threshold = -0.05` sementara |
+| **Kalibrasi** | Setelah warm-up | `threshold = median(buffer) + 0.02` — bias sedikit ke calm |
+| **Stabil** | Sepanjang sesi | Threshold tetap, tidak berubah lagi |
+
+> Bias `+0.02` ke calm mencegah over-sensitif terhadap fluktuasi arousal minor.
+> Server mengirim `threshold` dan `warming_up` (boolean) ke UI setiap update.
 
 ### Pipeline Overlay Stream
 
@@ -121,19 +128,22 @@ EMG Rejection (2-pass)        ← [✅ Impl.] Pass 1: pre-scan AF7/AF8 frontal E
 Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.20
     ↓                                     Juga track raw µV² + spectral centroid Hz untuk display UI
 Mental State Classifier       ← [✅ Impl.] Binary calm/tense — arousal index 0.50β−0.25α−0.25TBR
-    ↓                                      Drowsy override: tbr_raw>2.0 OR beta<0.25
-    ↓                                      Asymmetric vote buffer 12 tick (67% masuk, 33% keluar)
-Generative Music Engine       ← [✅ Impl.] FluidSynth + MIDI per state
-(music_engine.py)                          calm (BPM 55–72) vs tense (BPM 80–130)
-    ↓                                      bar-locked transitions (t%8==0, setiap half-bar)
+    ↓                                      Adaptive threshold: warm-up 60s → median+0.02
+    ↓                                      Symmetric vote buffer 12 tick (50% threshold)
+BrainBeat Drum Engine         ← [✅ Impl.] FluidSynth GM channel 9 (drums only)
+(music_engine.py)                          CALM: brush jazz 55–65 BPM
+    ↓                                      TENSE: battle drums 95–135 BPM
+    ↓                                      STRESS escalation (tense_level > 0.65): double-time kick
     ↓                                      Musik HANYA aktif saat Muse 2 terhubung
 WebSocket Server              ← [✅ Impl.] Flask-SocketIO, port 8765
 (music_server.py)                          payload: state, BPM, tense_level,
-    ↓                                      arousal, confidence, consistency, eeg_active
+    ↓                                      arousal, threshold, confidence, consistency,
+    ↓                                      warming_up, eeg_active
     ↓                                      θ/α/β raw µV², θ/α/β Hz centroid, HR, muse status
-HTML/CSS/JS Overlay           ← [✅ Impl.] BPM, HR, BUILD bar, SIGNAL (confidence),
-(templates/index.html)                     CONS (consistency), EEG channel map SVG,
-    ↓                                      waveform canvas + Hz centroid per band
+HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar,
+(templates/index.html)                     SIGNAL (confidence), CONS (consistency),
+    ↓                                      warming-up indicator, EEG channel map SVG,
+    ↓                                      waveform canvas θ/α/β + Hz centroid per band
 OBS Browser Source            ← Ditampilkan di stream
 ```
 
@@ -260,18 +270,19 @@ Ide-ide di bawah ini melampaui use case utama streaming game, mencakup berbagai 
 
 ### 🎮 Gaming & Entertainment
 
-**1. Emotion-Reactive Generative Music** ✅ *Live — Muse 2 terhubung*
-Real-time komposisi musik yang berubah berdasarkan mental state secara live. Melodi, tempo, dan harmoni mengikuti sinyal alpha/beta/theta secara langsung dari Muse 2.
+**1. EEG-Reactive Drum Engine (BrainBeat)** ✅ *Live — Muse 2 terhubung*
+Pola drum generatif yang berubah berdasarkan mental state secara live. Tempo dan intensitas drum mengikuti sinyal alpha/beta/theta dari Muse 2 secara langsung.
 
-Stack: **FluidSynth 2.4.x + pyfluidsynth 1.3.4 + Soundfont GM** via `music_engine.py`.
+Stack: **FluidSynth 2.4.x + pyfluidsynth 1.3.4 + Soundfont GM ch9** via `music_engine.py` (BrainBeat).
 
-| State | Karakter Musik | BPM |
+| State | Karakter Drum | BPM |
 |---|---|---|
-| **Calm** | String pad + choir, reverb dalam, maj7 progressi, ostinato pelan | 55–65 |
-| **Tense** | Brass swell, ostinato cepat, glitch stuttering, disonansi cluster | 80–130 |
+| **Calm** | Brush jazz — ride 8th, side stick 2&4, kick minimal | 55–65 |
+| **Tense** | Battle drums — 16th hi-hat constant, kick ganda, snare punchy | 95–135 |
+| **Stress** (tense_level > 0.65) | Double-time kick, snare + tom fill escalation | 110–135 |
 
-Transisi antar state dikunci ke bar boundary (16th note tick, t%16==0) — tidak abrupt mid-bar.
-UI menampilkan **SIGNAL** (confidence: seberapa jauh dari ambang batas 0.0) dan **CONS** (consistency: proporsi vote buffer yang sepakat) untuk monitoring signal quality.
+Adaptive threshold dikalibrasi otomatis 60 detik pertama (warm-up) berdasarkan distribusi arousal sesi itu.
+UI menampilkan **SIGNAL** (confidence), **CONS** (consistency), dan **WARMING UP** indicator saat kalibrasi berlangsung.
 
 **2. EEG-Driven Procedural Storytelling**
 Game RPG/visual novel yang cabang ceritanya tidak ditentukan oleh pilihan tombol, tapi oleh mental state pemain. Kalau otak mendeteksi stres saat konfrontasi, karakter bereaksi berbeda dibanding saat rileks. Genuine adaptive narrative berbasis biofeedback.

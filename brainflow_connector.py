@@ -554,11 +554,11 @@ class MuseConnector:
 
                 # ── Terminal log + CSV — 1 Hz (setiap 4 tick di 4 Hz) ────────────────
                 if self._loop_tick % 4 == 0:
-                    if ema_tbr_raw > 2.5 or (ema_tbr > 0.55 and ema_b < 0.40):
+                    if ema_b < 0.20:
                         state_hint = "calm"
                     else:
                         state_hint = (
-                            "tense" if (0.45 * ema_b - 0.25 * ema_a - 0.30 * ema_tbr) > 0.0
+                            "tense" if (0.50 * ema_b - 0.25 * ema_a - 0.25 * ema_tbr) > -0.05
                             else "calm"
                         )
                     hr_str = f"  ♥={self.heart_rate:.0f}" if self.heart_rate else ""
