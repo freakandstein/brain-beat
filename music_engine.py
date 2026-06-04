@@ -154,10 +154,10 @@ class EEGState:
     tbr_raw: float = 1.0
 
     def arousal(self) -> float:
-        return 0.50 * self.beta - 0.25 * self.alpha - 0.25 * self.tbr
+        return 0.50 * self.beta - 0.30 * self.alpha - 0.20 * self.tbr
 
     def mental_state(self, threshold: float = -0.05) -> str:
-        if self.beta < 0.20:
+        if self.beta < 0.22:
             return "calm"
         return "tense" if self.arousal() > threshold else "calm"
 
@@ -180,14 +180,15 @@ class MusicEngine:
         self._bpm      = 62.0
         self._tense_level = 0.0
         self._prev_state  = None
-        self._state_votes = deque(maxlen=12)
+        # Vote buffer 20 tick (~5 detik): butuh 70% supermajority untuk switch state
+        # Supaya tidak flip-flop saat sinyal di borderline
+        self._state_votes = deque(maxlen=20)
 
         # Adaptive threshold — rolling buffer 120 detik (4 Hz × 120 = 480 samples)
-        # Warm-up 60 detik pertama: kumpul data, pakai threshold default
-        # Setelah warm-up: threshold = median(buffer) + 0.02 (bias sedikit ke calm)
+        # Warm-up diperpendek ke 30 detik supaya adaptasi lebih cepat
         self._arousal_buf   = deque(maxlen=480)
-        self._adaptive_threshold = -0.05   # default sampai warm-up selesai
-        self._warmup_ticks  = 240          # 60 detik × 4 tick/detik
+        self._adaptive_threshold = 0.02    # default lebih tinggi — bias ke calm
+        self._warmup_ticks  = 60           # 15 detik × 4 tick/detik
 
         self.fs = fluidsynth.Synth(gain=0.8, samplerate=44100.0)
         self.fs.start(driver="coreaudio")
@@ -244,7 +245,12 @@ class MusicEngine:
 
     def stop(self):
         self._running = False
+        time.sleep(0.05)   # beri waktu tick terakhir selesai
         self._all_notes_off()
+        try:
+            self.fs.system_reset()   # matikan semua suara aktif di FluidSynth
+        except Exception:
+            pass
         print("■  BrainBeat berhenti.")
 
     # ── main loop ───────────────────────────────────────────────────────────
@@ -270,7 +276,7 @@ class MusicEngine:
                         and len(self._arousal_buf) >= 60):
                     import statistics
                     median = statistics.median(self._arousal_buf)
-                    self._adaptive_threshold = round(median + 0.02, 4)
+                    self._adaptive_threshold = round(median + 0.03, 4)
                     print(f"  ⚙  Adaptive threshold → {self._adaptive_threshold:.4f}")
 
                 # Vote buffer — asymmetric hysteresis
@@ -279,10 +285,11 @@ class MusicEngine:
                 total  = len(self._state_votes)
                 counts = Counter(self._state_votes)
                 cur = self._prev_state or "calm"
+                # Butuh 70% supermajority untuk switch state — mencegah flip-flop
                 if cur == "tense":
-                    state = "calm" if counts.get("calm", 0) >= max(1, int(total * 0.50)) else "tense"
+                    state = "calm" if counts.get("calm", 0) >= max(1, int(total * 0.70)) else "tense"
                 else:
-                    state = "tense" if counts.get("tense", 0) >= max(1, int(total * 0.50)) else "calm"
+                    state = "tense" if counts.get("tense", 0) >= max(1, int(total * 0.70)) else "calm"
 
                 if state != self._prev_state and self._prev_state is not None:
                     self._on_state_change(self._prev_state, state)
@@ -367,8 +374,7 @@ class MusicEngine:
     # ── helpers ─────────────────────────────────────────────────────────────
 
     def _hit(self, note: int, vel: int, dur: float):
-        """Satu pukulan drum — noteon + noteoff setelah dur detik."""
-        if vel <= 0:
+        if vel <= 0 or not self._running:
             return
         self.fs.noteon(CH_DRUMS, note, vel)
         threading.Timer(dur, lambda: self.fs.noteoff(CH_DRUMS, note)).start()
@@ -405,8 +411,7 @@ class MusicEngine:
     def _all_notes_off(self, channels: Optional[list] = None):
         chs = channels if channels else [CH_DRUMS]
         for ch in chs:
-            for n in range(128):
-                self.fs.noteoff(ch, n)
+            self.fs.cc(ch, 123, 0)   # MIDI CC 123 = All Notes Off — lebih cepat dari loop 128 noteoff
 
     def __del__(self):
         try:

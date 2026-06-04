@@ -115,7 +115,7 @@ class MuseConnector:
         self.running       = False
         self._loop_tick    = 0
         self._history      = {"alpha": [], "beta": [], "theta": [], "tbr": []}
-        self._HIST_LEN     = 240  # 60 s at 4 Hz update rate
+        self._HIST_LEN     = 120  # 30 s at 4 Hz — lebih responsif terhadap perubahan state
         self._stream_proc: Optional[subprocess.Popen] = None
         self._cancel       = threading.Event()
         self._mac_address  = ""        # stored for auto-reconnect
@@ -229,8 +229,8 @@ class MuseConnector:
 
         ppg_streams = resolve_byprop("type", "PPG", timeout=3.0)
 
-        eeg_inlet = StreamInlet(eeg_streams[0], max_buflen=5)
-        ppg_inlet = StreamInlet(ppg_streams[0], max_buflen=30) if ppg_streams else None
+        eeg_inlet = StreamInlet(eeg_streams[0], max_buflen=30, max_chunklen=0)
+        ppg_inlet = StreamInlet(ppg_streams[0], max_buflen=60, max_chunklen=0) if ppg_streams else None
 
         if ppg_inlet:
             print("📡  PPG LSL stream found — HR enabled!")
@@ -304,7 +304,7 @@ class MuseConnector:
 
             # ── Pull EEG ─────────────────────────────────────────────────
             try:
-                chunk, _ = eeg_inlet.pull_chunk(timeout=0.0, max_samples=512)
+                chunk, _ = eeg_inlet.pull_chunk(timeout=0.2, max_samples=512)
             except Exception:
                 chunk = []
             for sample in chunk:
@@ -316,7 +316,7 @@ class MuseConnector:
             # ── Pull PPG ──────────────────────────────────────────────────
             if ppg_inlet:
                 try:
-                    ppg_chunk, _ = ppg_inlet.pull_chunk(timeout=0.0, max_samples=256)
+                    ppg_chunk, _ = ppg_inlet.pull_chunk(timeout=0.0, max_samples=256)  # PPG non-blocking ok, buffer cukup besar
                 except Exception:
                     ppg_chunk = []
                 for sample in ppg_chunk:
@@ -361,30 +361,28 @@ class MuseConnector:
                 frontal_beta_list, frontal_theta_list = [], []  # AF7=1, AF8=2 only
 
                 # ── Pass 1: deteksi frontal EMG SEBELUM proses temporal ────────
-                # Bug sebelumnya: loop urut 0→3, TP9 masuk beta_list sebelum AF7/AF8
-                # sempat men-set _frontal_emg. Sekarang frontal discan dulu.
                 _frontal_emg = False
                 for ch in (1, 2):  # AF7, AF8
                     if ch_quality[ch] < 0.25:
                         continue
                     _fd = eeg_win[ch].copy()
                     DataFilter.detrend(_fd, DetrendOperations.CONSTANT.value)
-                    # Hanya butuh bandpass dan P2P untuk pre-scan — cepat
                     DataFilter.perform_bandpass(
                         _fd, SAMPLE_RATE, 0.5, 40.0, 4,
                         FilterTypes.BUTTERWORTH.value, 0
                     )
-                    if float(np.ptp(_fd)) > 150.0:
+                    # Threshold P2P dinaikkan: 150→250µV supaya gerakan kecil tidak trigger
+                    if float(np.ptp(_fd)) > 250.0:
                         _frontal_emg = True
                         break
-                    # Cek rasio spektral (EMG sustained low-amplitude)
+                    # Rasio spektral dinaikkan: 0.50→0.80 supaya lebih toleran
                     _psd_pre = DataFilter.get_psd_welch(
                         _fd, SAMPLE_RATE, SAMPLE_RATE // 2, SAMPLE_RATE,
                         WindowOperations.BLACKMAN_HARRIS.value
                     )
                     _blo = DataFilter.get_band_power(_psd_pre, 13.0, 25.0)
                     _bhi = DataFilter.get_band_power(_psd_pre, 25.0, 40.0)
-                    if _bhi / (_blo + 1e-6) > 0.50:
+                    if _bhi / (_blo + 1e-6) > 0.80:
                         _frontal_emg = True
                         break
 
@@ -450,21 +448,18 @@ class MuseConnector:
                     t_pow = DataFilter.get_band_power(psd,  4.0,  8.0)
 
                     if ch in (1, 2):
-                        # AF7/AF8: tidak pernah masuk beta_list (EMG frontalis).
-                        # Masuk frontal TBR hanya jika spektrum bersih (sudah dicek pass 1).
-                        if not _frontal_emg:
-                            frontal_beta_list.append(b_pow)
-                            frontal_theta_list.append(t_pow)
-                        # alpha/theta tetap dipakai dari frontal
                         a_pow = DataFilter.get_band_power(psd, 8.0, 13.0)
                         alpha_list.append(a_pow); theta_list.append(t_pow)
                         alpha_hz_list.append(_centroid(psd, 8.0, 13.0))
                         theta_hz_list.append(_centroid(psd, 4.0,  8.0))
-                        # beta_list: TIDAK ditambahkan dari frontal
+                        if not _frontal_emg:
+                            # Beta frontal valid kalau EMG tidak terdeteksi
+                            frontal_beta_list.append(b_pow)
+                            frontal_theta_list.append(t_pow)
+                            beta_list.append(b_pow)
+                            beta_hz_list.append(_centroid(psd, 13.0, 25.0))
                     else:
-                        # TP9/TP10: satu-satunya sumber beta.
-                        # Jika frontal EMG terdeteksi (pass 1), skip beta temporal juga
-                        # karena volume conduction dari frontalis ke TP9/TP10.
+                        # TP9/TP10: skip beta hanya kalau frontal EMG jelas terdeteksi
                         a_pow = DataFilter.get_band_power(psd, 8.0, 13.0)
                         alpha_list.append(a_pow); theta_list.append(t_pow)
                         alpha_hz_list.append(_centroid(psd, 8.0, 13.0))
