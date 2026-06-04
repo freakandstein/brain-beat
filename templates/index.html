@@ -107,6 +107,65 @@ body {
     font-size: 0.82rem;
 }
 
+/* ── Spectrum slider ─────────────────────────────────── */
+.spectrum-wrap {
+    margin: 14px 0 10px;
+}
+.spectrum-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+.spectrum-label {
+    font-family: 'Courier New', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+}
+.spectrum-label.calm  { color: #4ade80; }
+.spectrum-label.flow  { color: #facc15; text-align: center; flex: 1; }
+.spectrum-label.tense { color: #c084fc; }
+.spectrum-track {
+    position: relative;
+    height: 10px;
+    border-radius: 5px;
+    background: linear-gradient(90deg, #4ade80 0%, #facc15 50%, #c084fc 100%);
+    margin-bottom: 6px;
+}
+/* flow zone highlight: 35%–65% */
+.spectrum-flow-zone {
+    position: absolute;
+    top: -3px;
+    left: 35%;
+    width: 30%;
+    height: 16px;
+    border: 1.5px solid #facc1580;
+    border-radius: 4px;
+    pointer-events: none;
+}
+.spectrum-cursor {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 8px #fff8, 0 0 0 2px #0008;
+    transition: left 0.18s ease-out;
+    pointer-events: none;
+}
+.spectrum-sublabels {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Courier New', monospace;
+    font-size: 0.58rem;
+    color: var(--dim);
+    padding: 0 2px;
+}
+
+/* ── Flow score bar ──────────────────────────────────── */
+.bar-fill.flow-score { background: linear-gradient(90deg, #a3e635, #facc15, #fb923c); }
+
 .metrics-row {
     display: flex;
     gap: 28px;
@@ -363,6 +422,24 @@ body {
         <div id="state-desc">Calm / Relaxed</div>
       </div>
 
+      <!-- Spectrum: calm ← flow → tense -->
+      <div class="spectrum-wrap">
+        <div class="spectrum-labels">
+          <span class="spectrum-label calm">CALM</span>
+          <span class="spectrum-label flow">⬡ FLOW ZONE</span>
+          <span class="spectrum-label tense">TENSE</span>
+        </div>
+        <div class="spectrum-track">
+          <div class="spectrum-flow-zone"></div>
+          <div class="spectrum-cursor" id="spectrum-cursor" style="left:20%"></div>
+        </div>
+        <div class="spectrum-sublabels">
+          <span>relaxed</span>
+          <span>engaged calm</span>
+          <span>aroused</span>
+        </div>
+      </div>
+
       <div class="metrics-row">
         <div>
           <span class="metric-label">BPM</span>
@@ -394,13 +471,6 @@ body {
           <div class="bar-fill" id="conf-bar" style="background:#94a3b8;width:0%"></div>
         </div>
         <span class="bar-val" id="conf-pct">0%</span>
-      </div>
-      <div class="bar-row">
-        <span class="bar-label" id="cons-label" style="color:#94a3b8">CONS</span>
-        <div class="bar-track">
-          <div class="bar-fill" id="cons-bar" style="background:#94a3b8;width:0%"></div>
-        </div>
-        <span class="bar-val" id="cons-pct">0%</span>
       </div>
     </div>
 
@@ -481,15 +551,6 @@ body {
 
 <script src="/static/socket.io.min.js"></script>
 <script>
-const STATE_COLORS = {
-  calm:  '#4ade80',
-  tense: '#c084fc',
-};
-const STATE_DESC = {
-  calm:  'Calm / Relaxed',
-  tense: 'Tense / Aroused',
-};
-
 // ── Socket.IO ──────────────────────────────────────────────────────────────
 const socket = io();
 
@@ -506,25 +567,36 @@ socket.on('disconnect', () => {
 });
 
 socket.on('state_update', (d) => {
-  // State badge
-  const color = STATE_COLORS[d.state] || '#e2e8f0';
+  // ── Spectrum position & state badge ───────────────────────────────────
+  const sp = d.spectrum_pos ?? 0.2;  // 0=calm, 0.5=flow, 1=tense
+
+  // Badge sepenuhnya ikut spectrum_pos — selalu konsisten dengan slider
+  let displayState, color, desc;
+  if (sp > 0.65) {
+    displayState = 'TENSE'; color = '#c084fc'; desc = 'Tense / Aroused';
+  } else if (sp >= 0.35) {
+    displayState = 'FLOW';  color = '#facc15'; desc = 'Flow State';
+  } else {
+    displayState = 'CALM';  color = '#4ade80'; desc = 'Calm / Relaxed';
+  }
   const badge = document.getElementById('state-badge');
-  badge.textContent = d.state.toUpperCase();
+  badge.textContent = displayState;
   badge.style.color = color;
   badge.style.textShadow = `0 0 24px ${color}80`;
-  document.getElementById('state-desc').textContent = STATE_DESC[d.state] || '';
+  document.getElementById('state-desc').textContent = desc;
+
+  // Move spectrum cursor
+  document.getElementById('spectrum-cursor').style.left = (sp * 100) + '%';
 
   // Metrics
   document.getElementById('bpm-val').textContent = d.bpm.toFixed(1);
   document.getElementById('hr-val').textContent  = d.heart_rate ? d.heart_rate + ' bpm' : '—';
+
+  // Tense build bar
   const tl = d.tense_level || 0;
   document.getElementById('build-bar').style.width = (tl * 100) + '%';
   document.getElementById('build-pct').textContent = Math.round(tl * 100) + '%';
   document.getElementById('stress-build-row').style.display = 'none';
-
-  // Arousal index (raw, signed) — shown as SIGNAL bar label
-  const ar = d.arousal || 0;
-  // (hidden from metrics row, used only for conf-label coloring)
 
   // Confidence bar — sembunyikan saat device tidak connected
   const museOk = (d.muse === 'connected');
@@ -534,14 +606,6 @@ socket.on('state_update', (d) => {
   document.getElementById('conf-bar').style.background = cfColor;
   document.getElementById('conf-pct').textContent  = museOk ? Math.round(cf * 100) + '%' : '—';
   document.getElementById('conf-label').style.color = museOk ? cfColor : '#94a3b8';
-
-  // Consistency bar
-  const cs = museOk ? (d.consistency || 0) : 0;
-  const csColor = cs > 0.75 ? '#4ade80' : cs > 0.56 ? '#fbbf24' : '#f87171';
-  document.getElementById('cons-bar').style.width  = (cs * 100) + '%';
-  document.getElementById('cons-bar').style.background = csColor;
-  document.getElementById('cons-pct').textContent  = museOk ? Math.round(cs * 100) + '%' : '—';
-  document.getElementById('cons-label').style.color = museOk ? csColor : '#94a3b8';
 
   // EEG waveforms + dominant Hz display
   function toDb(v) { return 10 * Math.log10(Math.max(v, 1e-10)); }

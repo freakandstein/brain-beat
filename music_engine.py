@@ -129,6 +129,14 @@ CALM_STICK  = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]  # beat 2 & 4
 CALM_KICK   = [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]  # beat 1 saja
 CALM_OHIHAT = [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,0]  # "and" of 4 (aksen lembut)
 
+# FLOW — groove mid-tempo, engaged calm (72-85 BPM)
+# Hi-hat 8th seperti calm tapi snare defined di 2&4, kick lebih aktif
+# Jembatan natural antara calm jazz dan tense battle drums
+FLOW_HIHAT  = [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]  # 8th note (sama dengan calm ride rhythm)
+FLOW_SNARE  = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]  # snare solid beat 2 & 4
+FLOW_KICK   = [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0]  # beat 1 + "and" of 2 & 3
+FLOW_OHIHAT = [0,0,0,0, 0,0,0,1, 0,0,0,0, 0,0,0,1]  # open hi-hat "and" of 4 (groove accent)
+
 # TENSE — battle drums, relentless (100-130 BPM)
 # 16th hi-hat constant, kick ganda, snare punchy dengan ghost
 TENSE_HIHAT = [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1]  # 16th constant
@@ -152,9 +160,19 @@ class EEGState:
     theta: float = 0.2
     tbr:     float = 0.5
     tbr_raw: float = 1.0
+    frontal_alpha: float = 0.5
+    frontal_theta: float = 0.5
 
     def arousal(self) -> float:
         return 0.50 * self.beta - 0.30 * self.alpha - 0.20 * self.tbr
+
+    def flow_score(self) -> float:
+        """
+        Flow index dari frontal EEG: alpha + theta − beta (semua frontal AF7/AF8).
+        Flow state = engaged calm: alpha/theta frontal tinggi, beta rendah.
+        Range ~−1 .. +1, di-clip ke 0..1 setelah normalisasi di engine.
+        """
+        return self.frontal_alpha + self.frontal_theta - self.beta
 
     def mental_state(self, threshold: float = -0.05) -> str:
         if self.beta < 0.22:
@@ -166,6 +184,8 @@ class EEGState:
         self.beta  = max(0.0, min(1.0, self.beta))
         self.theta = max(0.0, min(1.0, self.theta))
         self.tbr   = max(0.0, min(1.0, self.tbr))
+        self.frontal_alpha = max(0.0, min(1.0, self.frontal_alpha))
+        self.frontal_theta = max(0.0, min(1.0, self.frontal_theta))
 
 
 # ── BrainBeat engine ──────────────────────────────────────────────────────────
@@ -207,13 +227,16 @@ class MusicEngine:
     # ── public API ──────────────────────────────────────────────────────────
 
     def set_eeg(self, alpha: float, beta: float, theta: float,
-                tbr: float = 0.5, tbr_raw: float = 1.0):
+                tbr: float = 0.5, tbr_raw: float = 1.0,
+                frontal_alpha: float = 0.5, frontal_theta: float = 0.5):
         with self._lock:
-            self.eeg.alpha   = alpha
-            self.eeg.beta    = beta
-            self.eeg.theta   = theta
-            self.eeg.tbr     = tbr
-            self.eeg.tbr_raw = tbr_raw
+            self.eeg.alpha         = alpha
+            self.eeg.beta          = beta
+            self.eeg.theta         = theta
+            self.eeg.tbr           = tbr
+            self.eeg.tbr_raw       = tbr_raw
+            self.eeg.frontal_alpha = frontal_alpha
+            self.eeg.frontal_theta = frontal_theta
             self.eeg.clamp()
 
     def get_arousal(self) -> float:
@@ -234,6 +257,30 @@ class MusicEngine:
             return 0.0
         top = Counter(self._state_votes).most_common(1)[0][1]
         return round(top / len(self._state_votes), 3)
+
+    def get_flow_score(self) -> float:
+        """
+        Flow score 0..1: 1.0 = deep flow, 0.0 = tidak ada flow.
+        Raw range flow_score() adalah ~−1..+1 (alpha+theta−beta, masing-masing 0..1).
+        Di-map ke 0..1: score 0 = −1, score 1 = +1.
+        """
+        raw = self.eeg.flow_score()   # range ~−1 .. +1
+        return round(float(max(0.0, min(1.0, (raw + 1.0) / 2.0))), 3)
+
+    def get_spectrum_position(self) -> float:
+        """
+        Posisi di spektrum calm←→tense sebagai 0..1.
+        0.0 = murni calm, 0.5 = flow zone, 1.0 = murni tense.
+        Diturunkan dari arousal relatif terhadap threshold:
+          arousal jauh di bawah threshold → mendekati 0 (calm)
+          arousal di sekitar threshold    → mendekati 0.5 (flow zone)
+          arousal jauh di atas threshold  → mendekati 1 (tense)
+        """
+        arousal   = self.eeg.arousal()
+        threshold = self._adaptive_threshold
+        # Normalisasi: delta ±0.15 = full swing dari center
+        delta = (arousal - threshold) / 0.15
+        return round(float(max(0.0, min(1.0, (delta + 1.0) / 2.0))), 3)
 
     def start(self):
         if self._running:
@@ -260,11 +307,13 @@ class MusicEngine:
             try:
                 with self._lock:
                     eeg = EEGState(
-                        alpha   = self.eeg.alpha,
-                        beta    = self.eeg.beta,
-                        theta   = self.eeg.theta,
-                        tbr     = self.eeg.tbr,
-                        tbr_raw = self.eeg.tbr_raw,
+                        alpha          = self.eeg.alpha,
+                        beta           = self.eeg.beta,
+                        theta          = self.eeg.theta,
+                        tbr            = self.eeg.tbr,
+                        tbr_raw        = self.eeg.tbr_raw,
+                        frontal_alpha  = self.eeg.frontal_alpha,
+                        frontal_theta  = self.eeg.frontal_theta,
                     )
 
                 # Feed arousal ke adaptive buffer
@@ -279,17 +328,22 @@ class MusicEngine:
                     self._adaptive_threshold = round(median + 0.03, 4)
                     print(f"  ⚙  Adaptive threshold → {self._adaptive_threshold:.4f}")
 
-                # Vote buffer — asymmetric hysteresis
-                raw = eeg.mental_state(self._adaptive_threshold)
+                # Vote buffer — 3-state: calm / flow / tense
+                # spectrum_pos: 0..0.35 = calm, 0.35..0.65 = flow, 0.65..1 = tense
+                sp = self.get_spectrum_position()
+                if sp > 0.65:
+                    raw = "tense"
+                elif sp >= 0.35:
+                    raw = "flow"
+                else:
+                    raw = "calm"
                 self._state_votes.append(raw)
                 total  = len(self._state_votes)
                 counts = Counter(self._state_votes)
                 cur = self._prev_state or "calm"
                 # Butuh 70% supermajority untuk switch state — mencegah flip-flop
-                if cur == "tense":
-                    state = "calm" if counts.get("calm", 0) >= max(1, int(total * 0.70)) else "tense"
-                else:
-                    state = "tense" if counts.get("tense", 0) >= max(1, int(total * 0.70)) else "calm"
+                best = counts.most_common(1)[0]
+                state = best[0] if best[1] >= max(1, int(total * 0.70)) else cur
 
                 if state != self._prev_state and self._prev_state is not None:
                     self._on_state_change(self._prev_state, state)
@@ -313,7 +367,6 @@ class MusicEngine:
 
         if state == "calm":
             # ── CALM: brush jazz ─────────────────────────────────────────
-            # Fade in: tidak langsung full volume saat pertama kali
             fade = min(1.0, (t / 16.0))
 
             if CALM_RIDE[s]:
@@ -331,6 +384,27 @@ class MusicEngine:
             if CALM_OHIHAT[s]:
                 vel = int(45 * fade)
                 self._hit(DR["hihat_o"], max(35, vel), 0.08)
+
+        elif state == "flow":
+            # ── FLOW: groove mid-tempo ────────────────────────────────────
+            fade = min(1.0, (t / 16.0))
+
+            if FLOW_HIHAT[s]:
+                # Aksen di downbeat, lebih soft di offbeat
+                vel = int((72 if s % 8 == 0 else 55) * fade)
+                self._hit(DR["hihat_c"], max(42, vel), 0.03)
+
+            if FLOW_SNARE[s]:
+                vel = int(70 * fade)
+                self._hit(DR["snare"], max(48, vel), 0.05)
+
+            if FLOW_KICK[s]:
+                vel = int(72 * fade)
+                self._hit(DR["kick"], max(48, vel), 0.06)
+
+            if FLOW_OHIHAT[s]:
+                vel = int(52 * fade)
+                self._hit(DR["hihat_o"], max(38, vel), 0.07)
 
         else:
             # ── TENSE: battle drums ───────────────────────────────────────
@@ -387,7 +461,9 @@ class MusicEngine:
 
     def _update_bpm(self, state: str, eeg: EEGState):
         if state == "calm":
-            target = 55 + eeg.alpha * 10   # 55–65 BPM
+            target = 55 + eeg.alpha * 10          # 55–65 BPM
+        elif state == "flow":
+            target = 72 + eeg.frontal_alpha * 13  # 72–85 BPM
         else:
             target = 95 + self._tense_level * 40  # 95–135 BPM
         self._bpm += (target - self._bpm) * 0.04   # smooth glide
@@ -399,12 +475,16 @@ class MusicEngine:
         # Snap 60% BPM ke target baru
         if curr == "tense":
             snap = 95 + self._tense_level * 40
+        elif curr == "flow":
+            snap = 78.0
         else:
             snap = 62.0
         self._bpm += (snap - self._bpm) * 0.60
-        # Update reverb
+        # Update reverb — flow di tengah antara calm dan tense
         if curr == "calm":
             self.fs.set_reverb(roomsize=0.60, damping=0.55, width=0.8, level=0.45)
+        elif curr == "flow":
+            self.fs.set_reverb(roomsize=0.40, damping=0.65, width=0.65, level=0.35)
         else:
             self.fs.set_reverb(roomsize=0.25, damping=0.75, width=0.5, level=0.25)
 

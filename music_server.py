@@ -158,6 +158,8 @@ def _background_updater():
                         "warming_up":  engine.is_warming_up(),
                         "confidence":  round(engine.get_confidence(), 3),
                         "consistency": round(engine.get_consistency(), 3),
+                        "flow_score":  engine.get_flow_score(),
+                        "spectrum_pos": engine.get_spectrum_position(),
                         "eeg_active":  engine._running,
                         "alpha": round(eeg.alpha, 3),
                         "beta":  round(eeg.beta,  3),
