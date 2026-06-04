@@ -110,11 +110,15 @@ class MuseConnector:
         self.raw_bands: dict = {"alpha": 0.0, "beta": 0.0, "theta": 0.0}
         self.peak_hz:  dict = {"alpha": None, "beta": None, "theta": None}
         self.tbr: float = 0.5   # Theta/Beta Ratio frontal (0=focused, 1=drowsy)
+        # Frontal-only normalized values (AF7+AF8) — dipakai untuk flow_score
+        self.frontal_alpha: float = 0.5
+        self.frontal_theta: float = 0.5
 
         # Internal
         self.running       = False
         self._loop_tick    = 0
-        self._history      = {"alpha": [], "beta": [], "theta": [], "tbr": []}
+        self._history      = {"alpha": [], "beta": [], "theta": [], "tbr": [],
+                              "frontal_alpha": [], "frontal_theta": []}
         self._HIST_LEN     = 120  # 30 s at 4 Hz — lebih responsif terhadap perubahan state
         self._stream_proc: Optional[subprocess.Popen] = None
         self._cancel       = threading.Event()
@@ -138,13 +142,16 @@ class MuseConnector:
         self.running = False
         self._cancel.set()
         self._kill_proc()
-        self._history    = {"alpha": [], "beta": [], "theta": [], "tbr": []}
+        self._history    = {"alpha": [], "beta": [], "theta": [], "tbr": [],
+                            "frontal_alpha": [], "frontal_theta": []}
         self.heart_rate  = None
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
         self.raw_bands   = {"alpha": 0.0, "beta": 0.0, "theta": 0.0}
         self.peak_hz     = {"alpha": None, "beta": None, "theta": None}
         self.tbr         = 0.5
+        self.frontal_alpha = 0.5
+        self.frontal_theta = 0.5
         self._set_status("disconnected")
         print("■  Muse 2 disconnected.")
 
@@ -279,6 +286,7 @@ class MuseConnector:
         ema_tbr = 0.5                              # Theta/Beta Ratio EMA (frontal, normalized)
         ema_tbr_raw = 1.0                          # Raw theta/beta ratio EMA — bypass normalization
         ema_a_raw = ema_b_raw = ema_t_raw = 0.0  # raw uV2 EMA
+        ema_fa = ema_ft = 0.5             # frontal-only alpha/theta EMA (untuk flow_score)
         _poor_streak = 0   # tick berturut-turut tanpa channel valid
 
         # ── CSV logging ───────────────────────────────────────────────────
@@ -517,7 +525,18 @@ class MuseConnector:
                 ema_tbr     = ema_tbr     * (1 - EMA) + tbr     * EMA
                 ema_tbr_raw = ema_tbr_raw * (1 - EMA) + tbr_raw * EMA
                 self.tbr = round(ema_tbr, 3)
-                self.engine.set_eeg(ema_a, ema_b, ema_t, tbr=ema_tbr, tbr_raw=ema_tbr_raw)
+
+                # Frontal alpha/theta EMA — dari AF7+AF8 saja, untuk flow_score
+                if alpha_list:  # alpha_list berisi AF7+AF8 (pass 2, ch in (1,2))
+                    fa_raw = self._normalize("frontal_alpha", float(np.mean(alpha_list)))
+                    ft_raw = self._normalize("frontal_theta", float(np.mean(theta_list)))
+                    ema_fa = ema_fa * (1 - EMA) + fa_raw * EMA
+                    ema_ft = ema_ft * (1 - EMA) + ft_raw * EMA
+                self.frontal_alpha = round(ema_fa, 3)
+                self.frontal_theta = round(ema_ft, 3)
+
+                self.engine.set_eeg(ema_a, ema_b, ema_t, tbr=ema_tbr, tbr_raw=ema_tbr_raw,
+                                    frontal_alpha=ema_fa, frontal_theta=ema_ft)
 
                 # Raw uV2 EMA — untuk display UI
                 ema_a_raw = ema_a_raw*(1-EMA) + float(np.mean(alpha_list))*EMA
