@@ -171,40 +171,42 @@ OBS Browser Source            ← Ditampilkan di stream
 ## Software Stack
 
 ```
-Muse 2 (Bluetooth)
+Muse 2 (Bluetooth BLE)
     ↓
-BrainFlow (Python)            ← Akuisisi data real-time [JALUR UTAMA]
+muselsl (subprocess)          ← Stream EEG 256Hz + PPG 64Hz via LSL
     ↓
-MNE-Python / SciPy            ← Preprocessing & filtering
+pylsl StreamInlet             ← Baca LSL stream di main process
     ↓
-Feature Extraction            ← Band power (alpha, beta, theta)
+BrainFlow DataFilter          ← PSD Welch, band power, filtering only
     ↓
-Classifier                    ← scikit-learn (SVM/LDA)
+Feature Extraction            ← Band power θ/α/β + EMG rejection + EMA
     ↓
-Flask-SocketIO (WebSocket)    ← Server penghubung Python → Browser
+Mental State Classifier       ← Threshold-based: arousal index + adaptive threshold
+    ↓
+Flask-SocketIO (WebSocket)    ← Server penghubung Python → Browser (port 8765)
     ↓
 HTML/CSS/JS                   ← Overlay UI realtime
     ↓
 OBS Browser Source            ← Tampil di live stream
 ```
 
-> MuseLSL / BlueMuse tetap bisa digunakan sebagai jalur alternatif, terutama jika ingin kompatibilitas dengan tools berbasis LSL.
-
 ### Library & Tools
 
 | Tool | Fungsi | Status |
 |---|---|---|
-| **BrainFlow** | Library utama akuisisi EEG real-time, support Muse 2 langsung | 🔲 Belum diintegrasikan |
-| **MNE-Python** | Preprocessing, filtering, visualisasi EEG | 🔲 Belum |
-| **scikit-learn** | Machine learning classifier mental state (SVM/LDA) | 🔲 Belum (pakai threshold dulu) |
-| **FluidSynth** | Audio engine untuk generative music — render soundfont GM | ✅ Digunakan |
+| **muselsl** | Akuisisi EEG + PPG dari Muse 2 via Bluetooth, stream ke LSL | ✅ Digunakan |
+| **pylsl** | Baca LSL stream (EEG 256Hz + PPG 64Hz) di main process | ✅ Digunakan |
+| **BrainFlow DataFilter** | PSD Welch, band power computation, filtering only (bukan BoardShim) | ✅ Digunakan |
+| **bleak** | BLE scanner — scan Muse 2 device untuk mendapatkan MAC address | ✅ Digunakan |
+| **numpy** | Komputasi numerik — band power, normalisasi, EMA | ✅ Digunakan |
+| **FluidSynth** | Audio engine untuk generative drums — render soundfont GM ch9 | ✅ Digunakan |
 | **pyfluidsynth** | Python binding untuk FluidSynth | ✅ Digunakan |
-| **Flask-SocketIO** | WebSocket server — jembatan Python ke browser overlay | ✅ Digunakan |
+| **Flask-SocketIO** | WebSocket server — jembatan Python ke browser overlay (port 8765) | ✅ Digunakan |
 | **HTML/CSS/JS** | UI overlay yang ditampilkan via OBS Browser Source | ✅ Digunakan |
 | **OBS Studio** | Software streaming, menampilkan overlay via Browser Source | ✅ Target output |
-| **EEG-Notebooks** | Dataset dari Muse asli + koleksi eksperimen BCI | 🔲 Untuk simulasi nanti |
-| **MuseLSL** | Alternatif connector via LSL | 🔲 Backup |
-| **Mind Monitor** | App third-party untuk streaming data via OSC (backup) | 🔲 Backup |
+| **scikit-learn** | Machine learning classifier mental state (SVM/LDA) | 🔲 Planned (upgrade dari threshold) |
+| **MNE-Python** | Preprocessing, filtering, visualisasi EEG lanjutan | 🔲 Planned |
+| **EEG-Notebooks** | Dataset dari Muse asli untuk training/fine-tuning classifier | 🔲 Planned |
 
 ---
 
@@ -255,12 +257,13 @@ Tiap sesi mencakup fase berikut secara bergantian:
 
 ## Roadmap
 
-| Fase | Kapan | Aktivitas |
+| Fase | Status | Aktivitas |
 |---|---|---|
-| **Fase 1** | Sekarang (tanpa device) | Bangun pipeline lengkap dengan dataset publik Muse; buat prototype overlay HTML |
-| **Fase 2** | Saat Muse 2 tiba | Rekam data sendiri 3–7 sesi di hari berbeda, fine-tune classifier mental state |
-| **Fase 3** | ~2 minggu setelah device | Integrasi overlay ke OBS, kalibrasi threshold, uji latency realtime saat gaming |
-| **Fase 4** | Setelah overlay stabil | Eksplorasi active command (SSVEP) sebagai fitur tambahan — disesuaikan dengan game |
+| **Fase 1** | ✅ Selesai | Pipeline lengkap: muselsl + pylsl + BrainFlow DataFilter + adaptive threshold + drum engine + OBS overlay |
+| **Fase 2** | ✅ Selesai | Integrasi Muse 2 realtime — BLE acquisition, EMG rejection, vote buffer, PPG heart rate |
+| **Fase 3** | ✅ Selesai | Overlay OBS live — kalibrasi threshold, signal quality, warming-up indicator, waveform display |
+| **Fase 4** | 🔲 Next | Rekam dataset personal 3–7 sesi, train ML classifier (SVM/LDA) sebagai upgrade dari threshold |
+| **Fase 5** | 🔲 Planned | Eksplorasi active command (SSVEP) sebagai fitur tambahan — disesuaikan dengan game |
 
 ---
 

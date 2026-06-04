@@ -65,7 +65,6 @@ Save to `~/soundfonts/GeneralUser.sf2`.
 **Use Terminal.app** (not VS Code terminal — the process gets killed on idle):
 
 ```bash
-cd ~/Documents/Project/EEG
 python3 music_server.py
 ```
 
