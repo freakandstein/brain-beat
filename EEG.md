@@ -4,10 +4,10 @@
 
 | Komponen | Status | Keterangan |
 |---|---|---|
-| **music_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, binary calm/tense, adaptive threshold (60s warm-up), tense_level build-up |
+| **music_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, 3-state calm/flow/tense, adaptive threshold (60s warm-up), tense_level build-up, flow_score dari frontal EEG |
 | **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR |
 | **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar, SIGNAL, CONS, warming-up indicator, EEG channel map, waveform Hz display |
-| **State detection** | ✅ Selesai | Binary calm/tense — arousal index 0.50β−0.25α−0.25TBR + adaptive threshold (warm-up 60s) + symmetric vote buffer 12 tick |
+| **State detection** | ✅ Selesai | 3-state calm/flow/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
 | **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
 | **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
 | **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
@@ -127,11 +127,15 @@ EMG Rejection (2-pass)        ← [✅ Impl.] Pass 1: pre-scan AF7/AF8 frontal E
     ↓                                      Pass 2: beta dari TP9/TP10 di-blank jika frontal EMG aktif
 Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.20
     ↓                                     Juga track raw µV² + spectral centroid Hz untuk display UI
-Mental State Classifier       ← [✅ Impl.] Binary calm/tense — arousal index 0.50β−0.25α−0.25TBR
-    ↓                                      Adaptive threshold: warm-up 60s → median+0.02
-    ↓                                      Symmetric vote buffer 12 tick (50% threshold)
+Mental State Classifier       ← [✅ Impl.] 3-state calm/flow/tense
+    ↓                                      arousal index 0.50β−0.30α−0.20TBR
+    ↓                                      flow_score = frontal_α + frontal_θ − β (AF7/AF8)
+    ↓                                      spectrum_pos 0..1 → calm (<0.35) / flow (0.35–0.65) / tense (>0.65)
+    ↓                                      Adaptive threshold: warm-up 60s → median+0.03
+    ↓                                      Vote buffer 20 tick (70% supermajority)
 BrainBeat Drum Engine         ← [✅ Impl.] FluidSynth GM channel 9 (drums only)
 (music_engine.py)                          CALM: brush jazz 55–65 BPM
+    ↓                                      FLOW: groove mid-tempo 72–85 BPM
     ↓                                      TENSE: battle drums 95–135 BPM
     ↓                                      STRESS escalation (tense_level > 0.65): double-time kick
     ↓                                      Musik HANYA aktif saat Muse 2 terhubung

@@ -103,24 +103,31 @@ Compatible with **OBS Browser Source** (stream overlay).
 
 ### State Detection
 
-Binary 2-class system: `calm` vs `tense`.
+3-class system: `calm` / `flow` / `tense`, driven by `spectrum_pos` (0..1).
 
 ```
-arousal = 0.50 × beta − 0.25 × alpha − 0.25 × TBR
+arousal    = 0.50 × beta − 0.30 × alpha − 0.20 × TBR
+flow_score = frontal_alpha + frontal_theta − beta   (AF7/AF8 only)
+
+spectrum_pos: 0.0──────0.35──[FLOW ZONE]──0.65──────1.0
+               calm            flow               tense
 ```
+
+State badge dan drum engine keduanya driven oleh `spectrum_pos` — tidak ada divergensi antara UI dan audio.
 
 **Adaptive threshold** — not hardcoded:
-- During the first 60 seconds (240 ticks × 4 Hz), the engine **warms up** and collects arousal samples.
-- After warm-up: `threshold = median(buffer) + 0.02` — slight bias toward calm.
-- Default before calibration: `-0.05`.
+- During the first 60 seconds, the engine **warms up** and collects arousal samples.
+- After warm-up: `threshold = median(buffer) + 0.03` — slight bias toward calm.
+- Default before calibration: `+0.02`.
 - `is_warming_up()` and `get_threshold()` are exposed from the server and shown in the UI.
 
-**Vote buffer** — 12-tick symmetric (50/50):
+**Vote buffer** — 20-tick, 70% supermajority to switch state (prevents flip-flop):
 
-| Transition | Threshold |
-|---|---|
-| calm → tense | ≥ 50% tense votes |
-| tense → calm | ≥ 50% calm votes |
+| From | To | Requirement |
+|---|---|---|
+| any | flow | ≥ 70% flow votes |
+| any | tense | ≥ 70% tense votes |
+| any | calm | ≥ 70% calm votes |
 
 ### Drum Patterns per State
 
@@ -132,6 +139,15 @@ Kick      : [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]  → beat 1 only
 Open HH   : [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,0]  → "and" of 4 (soft accent)
 ```
 
+**FLOW** — groove mid-tempo, engaged calm (72–85 BPM)
+```
+Hi-Hat c  : [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]  → 8th note (same rhythm as calm ride)
+Snare     : [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]  → solid beats 2 & 4
+Kick      : [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0]  → beat 1 + "and" of 2 & 3
+Open HH   : [0,0,0,0, 0,0,0,1, 0,0,0,0, 0,0,0,1]  → groove accent "and" of 4
+```
+BPM: `72 + frontal_alpha × 13` (range 72–85). Natural bridge between calm and tense.
+
 **TENSE** — battle drums, relentless (95–135 BPM)
 ```
 Hi-Hat  : [1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1]  → constant 16th
@@ -142,7 +158,7 @@ Open HH : [0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0]  → offbeat accent
 
 **tense_level** is a build-up momentum value (0.0 → 1.0):
 - Increases `+0.006` per tick while tense
-- Decreases `−0.004` per tick while calm
+- Decreases `−0.004` per tick while calm or flow
 - TENSE BPM: `95 + tense_level × 40` (range 95–135 BPM)
 - When `tense_level > 0.65`: drum pattern intensifies — double-time kick and tom fills kick in
 
@@ -186,12 +202,16 @@ beta_hz_list.append(_centroid(psd, 13.0, 25.0))               # spectral centroi
 # 6. Normalize + EMA → send to engine
 alpha = self._normalize("alpha", np.mean(alpha_list))  # rolling p10–p90
 ema_a = ema_a * 0.80 + alpha * 0.20  # EMA=0.20, time constant ~1.1s
-self.engine.set_eeg(ema_a, ema_b, ema_t, tbr=ema_tbr, tbr_raw=ema_tbr_raw)
+# frontal_alpha/frontal_theta (AF7+AF8 only) juga dikirim untuk flow_score
+self.engine.set_eeg(ema_a, ema_b, ema_t, tbr=ema_tbr, tbr_raw=ema_tbr_raw,
+                    frontal_alpha=ema_fa, frontal_theta=ema_ft)
 
 # 7. Raw µV² EMA + Hz centroid → stored for UI display
 ema_a_raw = ema_a_raw * 0.80 + np.mean(alpha_list) * 0.20
-self.raw_bands = {"alpha": ema_a_raw, "beta": ema_b_raw, "theta": ema_t_raw}
-self.peak_hz   = {"alpha": centroid_a, "beta": centroid_b, "theta": centroid_t}
+self.raw_bands  = {"alpha": ema_a_raw, "beta": ema_b_raw, "theta": ema_t_raw}
+self.peak_hz    = {"alpha": centroid_a, "beta": centroid_b, "theta": centroid_t}
+self.frontal_alpha = round(ema_fa, 3)
+self.frontal_theta = round(ema_ft, 3)
 ```
 
 **engine.start()** is called only when `muse_status == "connected"` — no audio before Muse is connected.
