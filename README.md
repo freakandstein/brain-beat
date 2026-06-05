@@ -14,10 +14,14 @@ Muse 2 (Bluetooth BLE)
 BrainFlow DataFilter — PSD Welch, band power θ/α/β
     ↓  2-pass EMG rejection (frontal + temporal)
     ↓  Rolling normalization p10–p90 + EMA 0.20
-Mental State Classifier — arousal = 0.50β − 0.25α − 0.25TBR
-    ↓  Adaptive threshold (60s warm-up) + 12-tick vote buffer
+Mental State Classifier — arousal = 0.50β − 0.30α − 0.20TBR
+    ↓  flow_score = frontal_α + frontal_θ − β  (AF7/AF8)
+    ↓  spectrum_pos 0..1 → calm / flow / tense zones
+    ↓  Adaptive threshold (60s warm-up) + 20-tick vote buffer (70% supermajority)
 BrainBeat Drum Engine — FluidSynth GM ch9
-    ↓  CALM: brush jazz (55–65 BPM) | TENSE: battle drums (95–135 BPM)
+    ↓  CALM: brush jazz (55–65 BPM)
+    ↓  FLOW: groove mid-tempo (72–85 BPM)
+    ↓  TENSE: battle drums (95–135 BPM)
 Flask-SocketIO (port 8765) → Browser Overlay → OBS Browser Source
 ```
 
@@ -27,18 +31,27 @@ Flask-SocketIO (port 8765) → Browser Overlay → OBS Browser Source
 
 ### Mental State Detection
 
-The system classifies two states in real-time:
+The system classifies three states in real-time via a continuous spectrum:
+
+```
+0.0 ────────── 0.35 ──[FLOW ZONE]── 0.65 ────────── 1.0
+  calm                   flow                  tense
+```
 
 | State | EEG Signature | Drum Character | BPM |
 |---|---|---|---|
 | **CALM** | Alpha/theta dominant | Brush jazz — ride 8th, side stick 2&4, minimal kick | 55–65 |
+| **FLOW** | Frontal alpha+theta high, beta low | Groove — closed hi-hat 8th, solid snare 2&4, active kick | 72–85 |
 | **TENSE** | Beta dominant | Battle drums — constant 16th hi-hat, double kick, punchy snare | 95–135 |
+
+State badge and drum engine are both driven by `spectrum_pos` — always in sync.
 
 As tense duration increases, `tense_level` builds from 0 → 1, gradually escalating drum intensity (double-time kick, tom fills) within the TENSE state itself.
 
 **Arousal index:**
 ```
-arousal = 0.50 × beta − 0.25 × alpha − 0.25 × TBR
+arousal    = 0.50 × beta − 0.30 × alpha − 0.20 × TBR
+flow_score = frontal_alpha + frontal_theta − beta  (AF7/AF8 only)
 ```
 
 ### Adaptive Threshold
@@ -63,10 +76,10 @@ Facial muscle artifacts (EMG) are the biggest source of false positives in front
 
 ### State Smoothing
 
-A 12-tick symmetric vote buffer (50/50) prevents the state from flickering:
-- Each tick the engine votes `calm` or `tense` based on the current arousal value
-- State only changes when ≥ 50% of the last 12 ticks agree
-- Buffer window = ~1.5–2.5 seconds depending on BPM
+A 20-tick vote buffer (70% supermajority) prevents the state from flickering:
+- Each tick votes `calm`, `flow`, or `tense` based on `spectrum_pos`
+- State only changes when ≥ 70% of the last 20 ticks agree on the new state
+- Buffer window = ~2–4 seconds depending on BPM
 
 ---
 
