@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BrainBeat Overlay</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+
+  #overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  #fx-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ── Center text ── */
+  #center-text {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6em;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.25s ease-out, transform 0.25s ease-out;
+  }
+
+  /* Kecil di atas — label seperti readout alat ukur */
+  #text-label {
+    font-family: 'Courier New', monospace;
+    font-size: clamp(0.65rem, 1.1vw, 1rem);
+    letter-spacing: 0.35em;
+    color: #00eaff99;
+    text-transform: uppercase;
+  }
+
+  /* Teks utama */
+  #text-main {
+    font-family: 'Courier New', monospace;
+    font-size: clamp(2.4rem, 8vw, 8rem);
+    font-weight: 900;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #ffffff;
+    text-shadow:
+      0 0 4px  #ffffff,
+      0 0 12px #00eaff,
+      0 0 28px #00aaff,
+      0 0 55px #0077ffcc,
+      0 0 90px #0044ff99;
+    -webkit-text-stroke: 0.5px #00eaff;
+    background: rgba(0, 10, 30, 0.72);
+    padding: 0.2em 0.6em;
+    border-left: 2px solid #00eaff88;
+    border-right: 2px solid #00eaff88;
+  }
+
+  /* Garis bawah tipis — seperti oscilloscope readout */
+  #text-sub {
+    font-family: 'Courier New', monospace;
+    font-size: clamp(0.55rem, 0.9vw, 0.82rem);
+    letter-spacing: 0.28em;
+    color: #00eaff55;
+    text-transform: uppercase;
+  }
+
+  #overlay.active            { opacity: 1; }
+  #overlay.active #center-text { opacity: 1; transform: translateY(0); }
+  #overlay.fadeout           { transition: opacity 1.4s ease-in; opacity: 0; }
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <canvas id="fx-canvas"></canvas>
+  <div id="center-text">
+    <span id="text-label">EEG · AF7 / AF8</span>
+    <span id="text-main">BRAIN SIGNAL RECEIVED</span>
+    <span id="text-sub">frontal cortex activation detected</span>
+  </div>
+</div>
+
+<script src="/static/socket.io.min.js"></script>
+<script>
+const canvas = document.getElementById('fx-canvas');
+const ctx    = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Electric arc helper ───────────────────────────────────────────────────────
+// Gambar garis zig-zag acak menyerupai percikan listrik antara dua titik
+function drawArc(x0, y0, x1, y1, color, segments, jitter) {
+  const pts = [[x0, y0]];
+  for (let i = 1; i < segments; i++) {
+    const t  = i / segments;
+    const mx = x0 + (x1 - x0) * t + (Math.random() - 0.5) * jitter;
+    const my = y0 + (y1 - y0) * t + (Math.random() - 0.5) * jitter;
+    pts.push([mx, my]);
+  }
+  pts.push([x1, y1]);
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = 1.2;
+  ctx.shadowBlur  = 10;
+  ctx.shadowColor = color;
+  ctx.stroke();
+  ctx.shadowBlur  = 0;
+}
+
+// ── Corner bracket ────────────────────────────────────────────────────────────
+function drawCorners(alpha) {
+  const len = 48, thick = 2;
+  const pad = 18;
+  const color = `rgba(0,234,255,${alpha})`;
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = thick;
+  ctx.shadowBlur  = 12;
+  ctx.shadowColor = '#00eaff';
+
+  const corners = [
+    [pad, pad,  1,  1],
+    [W-pad, pad, -1,  1],
+    [pad, H-pad,  1, -1],
+    [W-pad, H-pad, -1, -1],
+  ];
+  for (const [cx, cy, sx, sy] of corners) {
+    ctx.beginPath();
+    ctx.moveTo(cx + sx * len, cy);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx, cy + sy * len);
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+}
+
+// ── Scan line ─────────────────────────────────────────────────────────────────
+// Garis horizontal tipis yang menyapu layar sekali dari atas ke bawah
+let scanY    = -1;
+let scanning = false;
+
+// ── Edge glow — gradient tipis di tepi layar ──────────────────────────────────
+function drawEdgeGlow(alpha) {
+  const size = 120;
+  const sides = [
+    // top
+    { x0:0, y0:0, x1:0, y1:size, hor: true },
+    // bottom
+    { x0:0, y0:H, x1:0, y1:H-size, hor: true },
+    // left
+    { x0:0, y0:0, x1:size, y1:0, hor: false },
+    // right
+    { x0:W, y0:0, x1:W-size, y1:0, hor: false },
+  ];
+
+  for (const s of sides) {
+    let g;
+    if (s.hor) {
+      g = ctx.createLinearGradient(0, s.y0, 0, s.y1);
+    } else {
+      g = ctx.createLinearGradient(s.x0, 0, s.x1, 0);
+    }
+    g.addColorStop(0,   `rgba(0,180,255,${alpha * 0.45})`);
+    g.addColorStop(0.4, `rgba(0,100,255,${alpha * 0.15})`);
+    g.addColorStop(1,   `rgba(0,0,0,0)`);
+    ctx.fillStyle = g;
+    if (s.hor) {
+      ctx.fillRect(0, Math.min(s.y0, s.y1), W, size);
+    } else {
+      ctx.fillRect(Math.min(s.x0, s.x1), 0, size, H);
+    }
+  }
+}
+
+// ── Arc system ────────────────────────────────────────────────────────────────
+let arcs       = [];
+let arcActive  = false;
+let arcTick    = 0;
+
+function spawnArcs() {
+  // Spawn 2–4 arc dari titik tepi acak ke titik lain
+  const count = 2 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const side = Math.floor(Math.random() * 4);
+    let x0, y0;
+    if      (side === 0) { x0 = Math.random() * W; y0 = 0; }
+    else if (side === 1) { x0 = Math.random() * W; y0 = H; }
+    else if (side === 2) { x0 = 0;  y0 = Math.random() * H; }
+    else                 { x0 = W;  y0 = Math.random() * H; }
+
+    // Tujuan: tepi sisi berlawanan, sedikit ke tengah
+    const x1 = x0 + (W/2 - x0) * (0.15 + Math.random() * 0.25);
+    const y1 = y0 + (H/2 - y0) * (0.15 + Math.random() * 0.25);
+
+    arcs.push({ x0, y0, x1, y1, life: 1.0,
+      segments: 8 + Math.floor(Math.random() * 8),
+      jitter:   30 + Math.random() * 60,
+      hue:      185 + Math.random() * 35,
+    });
+  }
+}
+
+let animId   = null;
+let fxActive = false;
+let phase    = 0;   // 0=muncul 1=sustain 2=fade
+let phaseT   = 0;
+
+function fxLoop() {
+  ctx.clearRect(0, 0, W, H);
+  phaseT++;
+
+  // Edge glow
+  const glowAlpha = phase < 2 ? Math.min(1, phaseT / 12) : Math.max(0, 1 - (phaseT - 30) / 20);
+  drawEdgeGlow(glowAlpha);
+
+  // Corner brackets
+  drawCorners(Math.min(1, glowAlpha * 1.5));
+
+  // Scan line — satu kali sweep saat phase 0
+  if (phase === 0) {
+    if (scanY < 0) scanY = 0;
+    scanY += H / 35;
+    if (scanY <= H) {
+      // Garis tipis bercahaya
+      const sg = ctx.createLinearGradient(0, scanY - 3, 0, scanY + 3);
+      sg.addColorStop(0,   'rgba(0,234,255,0)');
+      sg.addColorStop(0.5, 'rgba(0,234,255,0.55)');
+      sg.addColorStop(1,   'rgba(0,234,255,0)');
+      ctx.fillStyle = sg;
+      ctx.fillRect(0, scanY - 3, W, 6);
+    } else {
+      phase = 1; phaseT = 0;
+    }
+  }
+
+  // Arc — spawn tiap beberapa frame saat active
+  if (fxActive && arcTick++ % 4 === 0) spawnArcs();
+  for (const a of arcs) {
+    const c = `hsla(${a.hue},100%,75%,${a.life * 0.85})`;
+    drawArc(a.x0, a.y0, a.x1, a.y1, c, a.segments, a.jitter);
+    a.life -= 0.18;
+  }
+  arcs = arcs.filter(a => a.life > 0);
+
+  if (fxActive || arcs.length > 0 || phase < 2 || phaseT < 40) {
+    animId = requestAnimationFrame(fxLoop);
+  } else {
+    animId = null;
+  }
+}
+
+function startFx() {
+  fxActive = true;
+  arcTick  = 0;
+  phase    = 0;
+  phaseT   = 0;
+  scanY    = -1;
+  arcs     = [];
+  if (!animId) fxLoop();
+}
+
+function stopFx() {
+  fxActive = false;
+  phase    = 2;
+  phaseT   = 0;
+}
+
+// ── Overlay trigger ───────────────────────────────────────────────────────────
+const overlay = document.getElementById('overlay');
+let hideTimer = null;
+let fadeTimer = null;
+
+function triggerOverlay() {
+  clearTimeout(hideTimer);
+  clearTimeout(fadeTimer);
+  overlay.classList.remove('fadeout');
+  overlay.classList.add('active');
+  startFx();
+
+  hideTimer = setTimeout(() => {
+    stopFx();
+    overlay.classList.add('fadeout');
+    fadeTimer = setTimeout(() => {
+      overlay.classList.remove('active', 'fadeout');
+    }, 1500);
+  }, 2800);
+}
+
+// ── Socket.IO ─────────────────────────────────────────────────────────────────
+const socket = io();
+socket.on('connect',       () => console.log('[overlay] connected'));
+socket.on('disconnect',    () => console.log('[overlay] disconnected'));
+socket.on('eyebrow_raise', () => { console.log('[overlay] fired'); triggerOverlay(); });
+
+// Dev: Space / Enter untuk test tanpa Muse
+document.addEventListener('keydown', e => {
+  if (e.key === ' ' || e.key === 'Enter') triggerOverlay();
+});
+</script>
+</body>
+</html>

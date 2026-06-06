@@ -114,6 +114,10 @@ class MuseConnector:
         self.frontal_alpha: float = 0.5
         self.frontal_theta: float = 0.5
 
+        # Eyebrow raise detection — callback dipanggil saat terdeteksi
+        self.on_eyebrow_raise: Optional[callable] = None
+        self._eyebrow_cooldown: float = 0.0   # timestamp terakhir trigger
+
         # Internal
         self.running       = False
         self._loop_tick    = 0
@@ -145,6 +149,7 @@ class MuseConnector:
         self._history    = {"alpha": [], "beta": [], "theta": [], "tbr": [],
                             "frontal_alpha": [], "frontal_theta": []}
         self.heart_rate  = None
+        self._eyebrow_cooldown = 0.0
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
         self.raw_bands   = {"alpha": 0.0, "beta": 0.0, "theta": 0.0}
@@ -181,15 +186,35 @@ class MuseConnector:
     def _connect_thread(self, mac_address: str) -> None:
         self._mac_address = mac_address
         self._kill_proc()
-        try:
-            self._launch_and_loop(mac_address)
-        except Exception as e:
-            self.running = False
-            self._kill_proc()
-            self._set_status("error", str(e))
-            print(f"❌  Connection failed: {e}")
-        finally:
-            self.running = False
+        attempt = 0
+        while not self._cancel.is_set():
+            attempt += 1
+            try:
+                self._launch_and_loop(mac_address)
+                # _launch_and_loop returned normally (disconnect() dipanggil user)
+                break
+            except Exception as e:
+                self.running = False
+                self._kill_proc()
+                if self._cancel.is_set():
+                    break
+                # Backoff: 3s, 5s, 10s, lalu 15s untuk semua attempt berikutnya
+                delay = [3, 5, 10][min(attempt - 1, 2)] if attempt <= 3 else 15
+                msg = str(e)
+                print(f"⚠️  Connection lost: {msg}")
+                print(f"🔄  Auto-reconnect attempt {attempt} in {delay}s...")
+                self._set_status("reconnecting", msg)
+                for _ in range(delay * 4):  # check cancel setiap 250ms
+                    if self._cancel.is_set():
+                        break
+                    time.sleep(0.25)
+                if self._cancel.is_set():
+                    break
+        self.running = False
+        if self._cancel.is_set():
+            self._set_status("disconnected")
+        else:
+            self._set_status("error", "Reconnect stopped")
 
     def _launch_and_loop(self, mac_address: str) -> None:
         """Launch muselsl subprocess, wait for LSL streams, run _loop. Raises on failure."""
@@ -369,8 +394,12 @@ class MuseConnector:
                 frontal_beta_list, frontal_theta_list = [], []  # AF7=1, AF8=2 only
 
                 # ── Pass 1: deteksi frontal EMG SEBELUM proses temporal ────────
+                # Scan semua channel tanpa break — perlu nilai kedua channel untuk
+                # eyebrow raise bilateral detection.
                 _frontal_emg = False
-                for ch in (1, 2):  # AF7, AF8
+                _ch_emg = {1: False, 2: False}
+                _ch_p2p = {1: 0.0,   2: 0.0}
+                for ch in (1, 2):  # AF7=1, AF8=2
                     if ch_quality[ch] < 0.25:
                         continue
                     _fd = eeg_win[ch].copy()
@@ -379,20 +408,47 @@ class MuseConnector:
                         _fd, SAMPLE_RATE, 0.5, 40.0, 4,
                         FilterTypes.BUTTERWORTH.value, 0
                     )
-                    # Threshold P2P dinaikkan: 150→250µV supaya gerakan kecil tidak trigger
-                    if float(np.ptp(_fd)) > 250.0:
-                        _frontal_emg = True
-                        break
-                    # Rasio spektral dinaikkan: 0.50→0.80 supaya lebih toleran
+                    _p2p = float(np.ptp(_fd))
+                    _ch_p2p[ch] = round(_p2p, 1)
                     _psd_pre = DataFilter.get_psd_welch(
                         _fd, SAMPLE_RATE, SAMPLE_RATE // 2, SAMPLE_RATE,
                         WindowOperations.BLACKMAN_HARRIS.value
                     )
                     _blo = DataFilter.get_band_power(_psd_pre, 13.0, 25.0)
                     _bhi = DataFilter.get_band_power(_psd_pre, 25.0, 40.0)
-                    if _bhi / (_blo + 1e-6) > 0.80:
+                    if _p2p > 150.0 or _bhi / (_blo + 1e-6) > 0.80:
                         _frontal_emg = True
-                        break
+                        _ch_emg[ch]  = True
+
+                # ── Eyebrow raise detection ────────────────────────────────────
+                # Syarat:
+                #   1. Bilateral: AF7 DAN AF8 keduanya >350µV
+                #   2. Simetris: rasio max/min kedua channel < 3.0
+                #      (eyebrow raise genuine = kedua sisi aktif proporsional,
+                #       noise/artifact unilateral biasanya satu sisi jauh lebih tinggi)
+                _now = time.time()
+                _p2p_af7 = _ch_p2p[1]
+                _p2p_af8 = _ch_p2p[2]
+                _both_strong = _p2p_af7 > 350.0 and _p2p_af8 > 350.0
+                _symmetric   = (max(_p2p_af7, _p2p_af8) / (min(_p2p_af7, _p2p_af8) + 1e-6)) < 3.0
+                _bilateral   = _both_strong and _symmetric
+
+                if _frontal_emg:
+                    _cd_left = max(0.0, 3.0 - (_now - self._eyebrow_cooldown))
+                    print(
+                        f"  [EMG] AF7 p2p={_ch_p2p[1]}µV | AF8 p2p={_ch_p2p[2]}µV | "
+                        f"bilateral={_bilateral} cooldown={_cd_left:.1f}s"
+                    )
+
+                if (_bilateral and
+                        self.on_eyebrow_raise and
+                        _now - self._eyebrow_cooldown > 3.0):
+                    self._eyebrow_cooldown = _now
+                    print("⚡  Eyebrow raise FIRED")
+                    try:
+                        self.on_eyebrow_raise()
+                    except Exception as _e:
+                        print(f"⚠️  on_eyebrow_raise error: {_e}")
 
                 # ── Pass 2: hitung band power semua channel ────────────────────
                 # Helper: spectral centroid (Hz dominan) dalam rentang band.
