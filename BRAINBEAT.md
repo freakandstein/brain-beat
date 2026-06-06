@@ -9,11 +9,14 @@ Drum patterns change automatically based on mental state: calm (brush jazz) or t
 Muse 2 (via muselsl + pylsl) / Simulator
         │
         ▼
-  music_engine.py      ← BrainBeat core: FluidSynth drums-only (GM channel 9)
+  brainflow_connector.py  ← EEG acquisition, EMG rejection, eyebrow raise detection
         │
-  music_server.py      ← Flask + SocketIO bridge (port 8765)
+  music_engine.py         ← BrainBeat core: FluidSynth drums-only (GM channel 9)
         │
-  templates/index.html ← Web UI "BRAIN BEAT MONITOR" (OBS overlay)
+  music_server.py         ← Flask + SocketIO bridge (port 8765)
+        │
+  templates/index.html    ← Web UI "BRAIN BEAT MONITOR" (OBS overlay)
+  templates/overlay.html  ← Eyebrow raise overlay FX (http://localhost:8765/overlay)
 ```
 
 ## EEG Bands
@@ -70,6 +73,38 @@ python3 music_server.py
 
 Open browser: **http://localhost:8765**
 
+## Eyebrow Raise Detection
+
+Frontal EMG from AF7/AF8 is used to detect deliberate eyebrow raises as an **active command**.
+
+### Detection Logic
+
+```
+Condition  : AF7 p2p > 350µV AND AF8 p2p > 350µV   (bilateral — both frontal channels)
+Symmetry   : max(p2p_AF7, p2p_AF8) / min(p2p_AF7, p2p_AF8) < 3.0
+             (genuine raise = both sides proportional; artifact = one side dominates)
+Cooldown   : 3 seconds between triggers
+```
+
+A unilateral artifact (jaw, temple, one eyebrow) will fail the symmetry check. A genuine bilateral raise passes both thresholds and fires `on_eyebrow_raise()`.
+
+### What Happens on Trigger
+
+1. `brainflow_connector.py` fires `on_eyebrow_raise` callback
+2. `music_server.py` emits `eyebrow_raise` via SocketIO
+3. `templates/overlay.html` receives the event and plays the visual FX
+
+### Overlay FX (`/overlay`)
+
+A separate transparent page at `http://localhost:8765/overlay`, designed as an OBS Browser Source layer on top of the game feed:
+
+- Full-screen electric arc particles + edge glow + scan line sweep
+- Center text: `BRAIN SIGNAL RECEIVED` with cyan neon glow
+- Auto-hides after **2.8 seconds** with 1.4s fade-out
+- Dev test: press **Space** or **Enter** to trigger without Muse
+
+Add as a second OBS Browser Source (same dimensions as game capture, above it in layer order).
+
 ## Web UI
 
 The browser UI (`templates/index.html`) displays:
@@ -95,7 +130,9 @@ The browser UI (`templates/index.html`) displays:
 
 **BCI Device Panel**
 - Muse 2 connection status, scan + connect/disconnect buttons
-- Socket live-dot (header left): grey=connecting, green=connected, red=disconnected
+- Socket live-dot (header left): grey=connecting, green=connected, orange=reconnecting, red=disconnected
+- Auto-reconnect: if connection drops, connector retries automatically with backoff (3s → 5s → 10s → 15s)
+- UI shows `🔄 Reconnecting...` and orange dot during reconnect attempts
 
 Compatible with **OBS Browser Source** (stream overlay).
 
@@ -168,6 +205,25 @@ Engine runs on a 16th-note loop (4 ticks per beat):
 - 1 tick = `(60 / BPM) / 4` seconds
 - Drum pattern: 16-step loop (= 1 bar of 4/4)
 - All hits via `note_on` + auto `note_off` after `dur` seconds (separate thread)
+
+## Auto-Reconnect
+
+If the LSL stream drops (Muse out of range, BLE hiccup), the connector automatically retries without any user action:
+
+| Attempt | Delay before retry |
+|---|---|
+| 1 | 3 seconds |
+| 2 | 5 seconds |
+| 3 | 10 seconds |
+| 4+ | 15 seconds |
+
+Status transitions during auto-reconnect:
+```
+connected → (drop) → reconnecting → ... → connected
+                   → (user disconnects) → disconnected
+```
+
+The UI shows an orange dot and `🔄 Reconnecting...` button while retrying. Manual disconnect cancels the loop immediately.
 
 ## Muse 2 Integration
 

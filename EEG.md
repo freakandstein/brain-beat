@@ -5,10 +5,13 @@
 | Komponen | Status | Keterangan |
 |---|---|---|
 | **music_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, 3-state calm/flow/tense, adaptive threshold (60s warm-up), tense_level build-up, flow_score dari frontal EEG |
-| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR |
-| **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar, SIGNAL, CONS, warming-up indicator, EEG channel map, waveform Hz display |
+| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR + eyebrow_raise event |
+| **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar, SIGNAL, CONS, warming-up indicator, EEG channel map, waveform Hz display, status reconnecting |
+| **Overlay FX (overlay.html)** | ✅ Selesai | Full-screen visual FX saat eyebrow raise terdeteksi — electric arc, scan line, edge glow, auto-hide 2.8s |
 | **State detection** | ✅ Selesai | 3-state calm/flow/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
 | **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
+| **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 >350µV + symmetry check (ratio <3.0) + cooldown 3s — active command via frontal EMG |
+| **Auto-reconnect** | ✅ Selesai | Jika koneksi Muse putus, retry otomatis dengan backoff 3s→5s→10s→15s, status reconnecting di UI |
 | **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
 | **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
 | **Channel quality filter** | ✅ Selesai | Channel poor di-skip dari band power computation |
@@ -114,7 +117,7 @@ Threshold arousal bukan hardcoded — dikalibrasi otomatis dari sinyal tiap sesi
 Muse 2 (Bluetooth)
     ↓
 muselsl subprocess            ← [✅ Impl.] Stream EEG + PPG via LSL
-    ↓
+    ↓  auto-reconnect: retry dengan backoff 3s→5s→10s→15s jika koneksi putus
 pylsl StreamInlet             ← [✅ Impl.] Baca EEG 256Hz + PPG 64Hz
     ↓
 BrainFlow DataFilter          ← [✅ Impl.] PSD Welch, band power (filter only)
@@ -123,8 +126,10 @@ Channel Quality Filter        ← [✅ Impl.] Skip channel quality < 0.25
     ↓
 Band Power θ/α/β              ← [✅ Impl.] 4–8 / 8–13 / 13–25 Hz (delta dihapus — hanya deep sleep)
     ↓
-EMG Rejection (2-pass)        ← [✅ Impl.] Pass 1: pre-scan AF7/AF8 frontal EMG sebelum temporal
+EMG Rejection (2-pass)        ← [✅ Impl.] Pass 1: scan AF7/AF8 p2p + spektral rasio (tanpa break)
     ↓                                      Pass 2: beta dari TP9/TP10 di-blank jika frontal EMG aktif
+Eyebrow Raise Detection       ← [✅ Impl.] AF7+AF8 keduanya >350µV + simetris (ratio <3.0) + cooldown 3s
+    ↓                                      Bilateral = eyebrow raise genuine; unilateral = artifact
 Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.20
     ↓                                     Juga track raw µV² + spectral centroid Hz untuk display UI
 Mental State Classifier       ← [✅ Impl.] 3-state calm/flow/tense
@@ -144,11 +149,18 @@ WebSocket Server              ← [✅ Impl.] Flask-SocketIO, port 8765
     ↓                                      arousal, threshold, confidence, consistency,
     ↓                                      warming_up, eeg_active
     ↓                                      θ/α/β raw µV², θ/α/β Hz centroid, HR, muse status
+    ↓                                      event: eyebrow_raise (SocketIO emit)
 HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar,
 (templates/index.html)                     SIGNAL (confidence), CONS (consistency),
     ↓                                      warming-up indicator, EEG channel map SVG,
     ↓                                      waveform canvas θ/α/β + Hz centroid per band
-OBS Browser Source            ← Ditampilkan di stream
+    ↓                                      status: connecting / reconnecting / connected / error
+Overlay FX                    ← [✅ Impl.] templates/overlay.html — http://localhost:8765/overlay
+(templates/overlay.html)                   Triggered by eyebrow_raise event via SocketIO
+    ↓                                      Visual: electric arc + scan line + edge glow + center text
+    ↓                                      Auto-hide setelah 2.8s, fade-out 1.4s
+OBS Browser Source            ← index.html: monitor overlay (port 8765)
+                                 overlay.html: eyebrow raise FX layer (di atas game capture)
 ```
 
 ### Kenapa HTML Browser Source (bukan aplikasi desktop)?
@@ -266,8 +278,9 @@ Tiap sesi mencakup fase berikut secara bergantian:
 | **Fase 1** | ✅ Selesai | Pipeline lengkap: muselsl + pylsl + BrainFlow DataFilter + adaptive threshold + drum engine + OBS overlay |
 | **Fase 2** | ✅ Selesai | Integrasi Muse 2 realtime — BLE acquisition, EMG rejection, vote buffer, PPG heart rate |
 | **Fase 3** | ✅ Selesai | Overlay OBS live — kalibrasi threshold, signal quality, warming-up indicator, waveform display |
-| **Fase 4** | 🔲 Next | Rekam dataset personal 3–7 sesi, train ML classifier (SVM/LDA) sebagai upgrade dari threshold |
-| **Fase 5** | 🔲 Planned | Eksplorasi active command (SSVEP) sebagai fitur tambahan — disesuaikan dengan game |
+| **Fase 4a** | ✅ Selesai | Active command via eyebrow raise — bilateral AF7+AF8 EMG detection, overlay FX, auto-reconnect |
+| **Fase 4b** | 🔲 Next | Rekam dataset personal 3–7 sesi, train ML classifier (SVM/LDA) sebagai upgrade dari threshold |
+| **Fase 5** | 🔲 Planned | Eksplorasi active command lain (SSVEP, alpha command) — disesuaikan dengan game |
 
 ---
 
