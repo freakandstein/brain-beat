@@ -11,8 +11,10 @@ Uses the **Muse 2** as a Passive BCI — the streamer's brain state (calm vs ten
 ```
 Muse 2 (Bluetooth BLE)
     ↓  muselsl + pylsl — EEG 256Hz, PPG 64Hz
+    ↓  auto-reconnect with backoff (3s → 5s → 10s → 15s) on drop
 BrainFlow DataFilter — PSD Welch, band power θ/α/β
     ↓  2-pass EMG rejection (frontal + temporal)
+    ↓  Eyebrow raise detection — bilateral AF7+AF8 >350µV, symmetry <3.0, cooldown 3s
     ↓  Rolling normalization p10–p90 + EMA 0.20
 Mental State Classifier — arousal = 0.50β − 0.30α − 0.20TBR
     ↓  flow_score = frontal_α + frontal_θ − β  (AF7/AF8)
@@ -22,12 +24,28 @@ BrainBeat Drum Engine — FluidSynth GM ch9
     ↓  CALM: brush jazz (55–65 BPM)
     ↓  FLOW: groove mid-tempo (72–85 BPM)
     ↓  TENSE: battle drums (95–135 BPM)
-Flask-SocketIO (port 8765) → Browser Overlay → OBS Browser Source
+Flask-SocketIO (port 8765)
+    ↓  /          → Brain Beat Monitor overlay (OBS Browser Source)
+    ↓  /overlay   → Eyebrow raise FX overlay (second OBS Browser Source layer)
+    ↓  eyebrow_raise event → triggers full-screen electric arc visual FX
 ```
 
 ---
 
 ## Features
+
+### Eyebrow Raise — Active Command
+
+A deliberate eyebrow raise triggers a full-screen visual FX overlay on a **separate page** (`/overlay`), suitable as a second OBS Browser Source layer above the game capture.
+
+**Detection logic:**
+- **Bilateral**: AF7 and AF8 both exceed 350µV peak-to-peak in the same window
+- **Symmetric**: the stronger side is less than 3× the weaker side (filters unilateral artifacts from jaw or temple)
+- **Cooldown**: 3 seconds between triggers to prevent repeated fires
+
+Once detected: `brainflow_connector` → `music_server` (SocketIO `eyebrow_raise`) → `overlay.html` (electric arc FX for 2.8 seconds).
+
+To test without a Muse: open `http://localhost:8765/overlay` and press **Space** or **Enter**.
 
 ### Mental State Detection
 
@@ -83,6 +101,19 @@ A 20-tick vote buffer (70% supermajority) prevents the state from flickering:
 
 ---
 
+### Auto-Reconnect
+
+If the Muse 2 connection drops (out of range, BLE hiccup), the connector retries automatically:
+
+| Attempt | Delay |
+|---|---|
+| 1st retry | 3 seconds |
+| 2nd retry | 5 seconds |
+| 3rd retry | 10 seconds |
+| 4th+ | 15 seconds |
+
+The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels the loop.
+
 ## Overlay UI (OBS Browser Source)
 
 `http://localhost:8765` — transparent background, ready to use as an OBS Browser Source.
@@ -115,6 +146,12 @@ A 20-tick vote buffer (70% supermajority) prevents the state from flickering:
 - **WARMING UP** — shown while the adaptive threshold is still calibrating
 - **EEG Channel Map** — SVG head diagram, electrode color = signal quality
 - **Waveform** — rolling θ/α/β canvas with spectral centroid Hz per band
+- **Reconnecting dot** — orange pulsing dot when auto-reconnect is in progress
+
+**Eyebrow Raise FX Overlay** (`http://localhost:8765/overlay`):
+- Transparent page, add as a second OBS Browser Source above the game capture
+- Displays electric arc particles, scan-line sweep, edge glow, and center text on trigger
+- Auto-hides after 2.8 seconds with fade-out
 
 ---
 
@@ -178,5 +215,7 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | Adaptive threshold + vote buffer | ✅ |
 | Heart rate via PPG | ✅ |
 | BrainBeat drum engine (FluidSynth) | ✅ |
-| OBS overlay UI | ✅ |
+| OBS overlay UI (index.html) | ✅ |
+| Eyebrow raise detection + overlay FX | ✅ |
+| Auto-reconnect with backoff | ✅ |
 | ML classifier (SVM/LDA) | 🔲 planned |
