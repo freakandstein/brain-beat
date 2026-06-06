@@ -67,6 +67,11 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/overlay")
+def overlay():
+    return render_template("overlay.html")
+
+
 # ── socket events ─────────────────────────────────────────────────────────────
 
 @socketio.on("connect")
@@ -205,7 +210,13 @@ def main():
             elif status in ("disconnected", "error") and engine:
                 engine.stop()
                 engine.set_eeg(alpha=0.70, beta=0.20, theta=0.20, tbr=0.60)
+
+        def _eyebrow_cb():
+            print("⚡  Eyebrow raise detected — triggering overlay")
+            socketio.emit("eyebrow_raise", {})
+
         muse = MuseConnector(engine, on_status=_muse_status_cb)
+        muse.on_eyebrow_raise = _eyebrow_cb
         print("✅  BrainFlow siap. Tekan 'Hubungkan Muse 2' di browser.")
     else:
         print("⚠️   brainflow tidak terinstall — koneksi Muse 2 tidak tersedia.")

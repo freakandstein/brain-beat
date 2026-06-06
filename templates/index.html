@@ -310,9 +310,10 @@ body {
     flex-shrink: 0;
     transition: background 0.3s;
 }
-.muse-dot.connected  { background: #4ade80; }
-.muse-dot.connecting { background: #fbbf24; animation: blink 0.9s infinite; }
-.muse-dot.error      { background: #f87171; }
+.muse-dot.connected    { background: #4ade80; }
+.muse-dot.connecting   { background: #fbbf24; animation: blink 0.9s infinite; }
+.muse-dot.reconnecting { background: #fb923c; animation: blink 0.6s infinite; }
+.muse-dot.error        { background: #f87171; }
 .muse-input-row {
     display: flex;
     gap: 8px;
@@ -689,11 +690,11 @@ function setMuseUI(status, text) {
   if (status === 'connected') {
     connectBtn.style.display = '';
     scanBtn.style.display    = 'none';
-  } else if (status === 'connecting') {
+  } else if (status === 'connecting' || status === 'reconnecting') {
     connectBtn.style.display = 'none';
     scanBtn.style.display    = '';
     scanBtn.disabled         = true;
-    scanBtn.textContent      = '⏳ Connecting...';
+    scanBtn.textContent      = status === 'reconnecting' ? '🔄 Reconnecting...' : '⏳ Connecting...';
   } else {
     // disconnected / error / unavailable
     connectBtn.style.display = 'none';
@@ -734,12 +735,13 @@ socket.on('muse_scan_result', (d) => {
 
 socket.on('muse_status', (d) => {
   clearTimeout(_connectTimeout);
-  if (d.status === 'disconnected' || d.status === 'error') {
+  if (d.status === 'disconnected' || d.status === 'error' || d.status === 'reconnecting') {
     museDisconnecting = false;
   }
   const msgs = {
     connected:    '✅ Muse 2 connected',
     connecting:   'Connecting...',
+    reconnecting: '🔄 Reconnecting...',
     disconnected: 'Not connected',
     error:        '❌ ' + (d.error || 'Connection failed'),
     unavailable:  'brainflow not installed',
