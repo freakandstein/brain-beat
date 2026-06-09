@@ -118,6 +118,22 @@ class MuseConnector:
         self.on_eyebrow_raise: Optional[callable] = None
         self._eyebrow_cooldown: float = 0.0   # timestamp terakhir trigger
 
+        # ── Mental command playground (3 modalitas campuran) ──────────────
+        # Wink (EOG asimetri AF7/AF8), Jaw clench (EMG sustained TP9/TP10),
+        # dan Eyebrow raise (EMG frontal bilateral AF7/AF8) — masing-masing
+        # punya callback + cooldown sendiri, dipanggil dari _loop.
+        self.on_wink: Optional[callable] = None
+        self.on_jaw_clench: Optional[callable] = None
+        self.on_eyes_closed_relax: Optional[callable] = None
+        self.on_double_blink: Optional[callable] = None   # deprecated
+        self.on_teeth_tap: Optional[callable] = None      # deprecated
+        self._wink_cooldown: float = 0.0
+        self._jaw_cooldown: float = 0.0
+        self._jaw_strong_streak: int = 0    # tick berturut-turut p2p EMG di atas threshold
+        self._relax_cooldown: float = 0.0
+        self._relax_streak: int = 0         # tick BERTURUT-TURUT dgn alpha_ratio > threshold (sustained closure)
+        self._relax_alpha_hist: list = []   # buffer raw frontal alpha power (uV^2) untuk baseline
+
         # Internal
         self.running       = False
         self._loop_tick    = 0
@@ -150,6 +166,12 @@ class MuseConnector:
                             "frontal_alpha": [], "frontal_theta": []}
         self.heart_rate  = None
         self._eyebrow_cooldown = 0.0
+        self._wink_cooldown    = 0.0
+        self._jaw_cooldown     = 0.0
+        self._jaw_strong_streak = 0
+        self._relax_cooldown   = 0.0
+        self._relax_streak     = 0
+        self._relax_alpha_hist = []
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
         self.raw_bands   = {"alpha": 0.0, "beta": 0.0, "theta": 0.0}
@@ -318,13 +340,28 @@ class MuseConnector:
         _csv_path  = f"eeg_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         _csv_file  = open(_csv_path, 'w', newline='')
         _csv_w     = csv.writer(_csv_file)
-        _csv_w.writerow(['time', 'elapsed_s', 'alpha', 'beta', 'theta', 'tbr', 'state', 'hr'])
+        _csv_w.writerow(['time', 'elapsed_s', 'alpha', 'beta', 'theta', 'tbr', 'state', 'hr',
+                         'eog_extreme', 'eog_zcross', 'frontal_emg', 'blink_candidates',
+                         'jaw_p2p_tp9', 'jaw_p2p_tp10', 'jaw_streak',
+                         'alpha_pow', 'alpha_baseline', 'alpha_ratio', 'relax_streak',
+                         'cmd_fired'])
         _t0 = time.time()
         print(f"📊  Logging EEG ke {_csv_path}")
+
+        # Diagnostik command playground — direset tiap tick, diisi detector,
+        # ditulis ke CSV supaya bisa dianalisa offline dari file log session.
+        _cmd_diag = {
+            "eog_extreme": "", "eog_zcross": "", "frontal_emg": "", "blink_candidates": "",
+            "jaw_p2p_tp9": "", "jaw_p2p_tp10": "", "jaw_streak": "",
+            "alpha_pow": "", "alpha_baseline": "", "alpha_ratio": "", "relax_streak": "",
+            "cmd_fired": "",
+        }
 
         while self.running:
             time.sleep(0.25)  # 4 Hz — lag max 250 ms sebelum EEG sampai ke engine
             self._loop_tick += 1
+            for _k in _cmd_diag:
+                _cmd_diag[_k] = ""
 
             # Subprocess health check
             if self._stream_proc and self._stream_proc.poll() is not None:
@@ -444,11 +481,88 @@ class MuseConnector:
                         self.on_eyebrow_raise and
                         _now - self._eyebrow_cooldown > 3.0):
                     self._eyebrow_cooldown = _now
+                    _cmd_diag["cmd_fired"] = "eyebrow_raise"
                     print("⚡  Eyebrow raise FIRED")
                     try:
                         self.on_eyebrow_raise()
                     except Exception as _e:
                         print(f"⚠️  on_eyebrow_raise error: {_e}")
+
+                # ══════════════════════════════════════════════════════════════
+                # Mental command playground — 3 modalitas campuran
+                # (lihat BRAINBEAT.md: kombinasi sinyal beda jenis ~95% andal)
+                # ══════════════════════════════════════════════════════════════
+
+                # ── 1) Wink (EOG/EMG asimetri, AF7 vs AF8) ─────────────────────
+                # Kedip satu mata menghasilkan defleksi UNILATERAL — hanya satu
+                # sisi frontal yang aktif kuat. Pembeda dari eyebrow raise yang
+                # BILATERAL (kedua AF7+AF8 sama-sama kuat & simetris):
+                #   - Wink: salah satu channel >> channel lainnya (rasio tinggi)
+                #   - Eyebrow raise: kedua channel kuat & simetris (rasio rendah)
+                # Syarat:
+                #   1. Satu channel > 200µV (ada defleksi berarti di satu sisi)
+                #   2. Rasio max/min > 4.0 (asimetri jelas — sisi lain jauh lebih lemah)
+                #   3. TIDAK _bilateral (bukan eyebrow raise)
+                _wink_strong  = max(_ch_p2p[1], _ch_p2p[2]) > 200.0
+                _wink_side    = _ch_p2p[1] if _ch_p2p[1] >= _ch_p2p[2] else _ch_p2p[2]
+                _wink_weak    = _ch_p2p[2] if _ch_p2p[1] >= _ch_p2p[2] else _ch_p2p[1]
+                _wink_ratio   = _wink_side / (_wink_weak + 1e-6)
+                _wink_asymm   = _wink_ratio > 4.0
+                _wink_eye     = "left" if _ch_p2p[1] >= _ch_p2p[2] else "right"
+
+                _cmd_diag["wink_af7"]   = round(_ch_p2p[1], 1)
+                _cmd_diag["wink_af8"]   = round(_ch_p2p[2], 1)
+                _cmd_diag["wink_ratio"] = round(_wink_ratio, 2)
+
+                if (_wink_strong and _wink_asymm and not _bilateral and
+                        self.on_wink and
+                        _now - self._wink_cooldown > 1.5):
+                    self._wink_cooldown = _now
+                    _cmd_diag["cmd_fired"] = "wink"
+                    print(f"😉  Wink FIRED ({_wink_eye}) — AF7={_ch_p2p[1]:.0f}µV AF8={_ch_p2p[2]:.0f}µV ratio={_wink_ratio:.1f}")
+                    try:
+                        self.on_wink()
+                    except Exception as _e:
+                        print(f"⚠️  on_wink error: {_e}")
+
+                # ── 2) Jaw clench (EMG broadband sustained, TP9/TP10) ──────────
+                # Sustained ≥2 tick berturut-turut. Guard frontal bleed tetap ada.
+                _jaw_p2p = {9: 0.0, 10: 0.0}
+                _jaw_strong_now = False
+                for ch, key in ((0, 9), (3, 10)):  # TP9=0, TP10=3
+                    if ch_quality[ch] < 0.25:
+                        continue
+                    _jd = eeg_win[ch].copy()
+                    DataFilter.detrend(_jd, DetrendOperations.CONSTANT.value)
+                    DataFilter.perform_bandpass(
+                        _jd, SAMPLE_RATE, 20.0, 100.0, 4,
+                        FilterTypes.BUTTERWORTH.value, 0
+                    )
+                    _jp2p = float(np.ptp(_jd))
+                    _jaw_p2p[key] = round(_jp2p, 1)
+                    if _jp2p > 600.0:
+                        _jaw_strong_now = True
+
+                if _jaw_strong_now and _bilateral:
+                    _jaw_strong_now = False  # frontal bleed, bukan jaw asli
+
+                self._jaw_strong_streak = self._jaw_strong_streak + 1 if _jaw_strong_now else 0
+
+                _cmd_diag["jaw_p2p_tp9"]  = _jaw_p2p[9]
+                _cmd_diag["jaw_p2p_tp10"] = _jaw_p2p[10]
+                _cmd_diag["jaw_streak"]   = self._jaw_strong_streak
+
+                if (self._jaw_strong_streak >= 2 and
+                        self.on_jaw_clench and
+                        _now - self._jaw_cooldown > 2.5):
+                    self._jaw_cooldown = _now
+                    self._jaw_strong_streak = 0
+                    _cmd_diag["cmd_fired"] = "jaw_clench"
+                    print(f"🦷  Jaw clench FIRED — TP9={_jaw_p2p[9]:.0f}µV TP10={_jaw_p2p[10]:.0f}µV")
+                    try:
+                        self.on_jaw_clench()
+                    except Exception as _e:
+                        print(f"⚠️  on_jaw_clench error: {_e}")
 
                 # ── Pass 2: hitung band power semua channel ────────────────────
                 # Helper: spectral centroid (Hz dominan) dalam rentang band.
@@ -591,6 +705,72 @@ class MuseConnector:
                 self.frontal_alpha = round(ema_fa, 3)
                 self.frontal_theta = round(ema_ft, 3)
 
+                # ── Eyes-closed relax (alpha lonjak, sustained 2 s) ────────────
+                # Menutup mata & relaks memicu Berger effect: power alpha
+                # frontal naik tajam (sering 1.5-3x baseline) & bertahan lama —
+                # beda dari blink/clench yang transient. Pakai RAW alpha power
+                # (uV^2, dari alpha_list = AF7+AF8) dibanding median 8 detik
+                # terakhir (baseline "mata terbuka") — lebih sensitif & stabil
+                # daripada nilai frontal_alpha yang sudah di-normalize+EMA berat.
+                if alpha_list:
+                    _fa_pow_now = float(np.mean(alpha_list))
+
+                    # Hitung ratio dulu pakai baseline LAMA (sebelum diupdate),
+                    # baru putuskan apakah sample ini layak masuk baseline.
+                    if len(self._relax_alpha_hist) >= 12:
+                        _fa_baseline = float(np.median(self._relax_alpha_hist))
+                        _fa_ratio = _fa_pow_now / (_fa_baseline + 1e-9)
+                    else:
+                        _fa_baseline = _fa_pow_now
+                        _fa_ratio = 1.0
+
+                    # Hanya masukkan ke buffer baseline kalau TIDAK sedang
+                    # lonjakan (ratio rendah) — kalau tidak, baseline ikut naik
+                    # mengejar event yg sedang dideteksi & ratio kolaps balik
+                    # ke ~1.0 dalam 1-2 tick (kebukti dari data: 7.44x -> 1.0x).
+                    if _fa_ratio <= 1.4:
+                        self._relax_alpha_hist.append(_fa_pow_now)
+                        if len(self._relax_alpha_hist) > 32:  # 8 s @ 4Hz
+                            self._relax_alpha_hist.pop(0)
+
+                    # Hitung tick BERTURUT-TURUT di atas threshold — bukan
+                    # vote tersebar. Data menunjukkan vote-window numpuk dari
+                    # spike acak/terpisah (mis. ratio 1.0→12.29→3.9→1.0→1.0→
+                    # 1.0→3.92→3.09 ikut numpuk jadi "sustained" palsu & fired).
+                    # "Mata terpejam 2-3 detik" = elevasi yg BERTAHAN tanpa
+                    # putus — reset total begitu satu tick turun di bawah
+                    # threshold (lebih ketat & jujur thd definisi "sustained").
+                    # Loop jalan @ 4Hz (~0.25s/tick) → ~2 detik ≈ 8 tick beruntun.
+                    if _fa_ratio > 1.6:
+                        self._relax_streak += 1
+                    else:
+                        self._relax_streak = 0
+
+                    _relax_consec = self._relax_streak
+
+                    _cmd_diag["alpha_pow"]      = round(_fa_pow_now, 1)
+                    _cmd_diag["alpha_baseline"] = round(_fa_baseline, 1)
+                    _cmd_diag["alpha_ratio"]    = round(_fa_ratio, 2)
+                    _cmd_diag["relax_streak"]   = _relax_consec
+
+                    if _relax_consec > 0 and _relax_consec % 2 == 0:
+                        print(f"  [ALPHA] power={_fa_pow_now:.1f} baseline={_fa_baseline:.1f} "
+                              f"ratio={_fa_ratio:.2f}x consecutive={_relax_consec}")
+
+                    if (_relax_consec >= 8 and
+                            self.on_eyes_closed_relax and
+                            _now - self._relax_cooldown > 4.0):
+                        self._relax_cooldown = _now
+                        self._relax_streak = 0
+                        self._relax_alpha_hist = []
+                        _cmd_diag["cmd_fired"] = "eyes_closed_relax"
+                        print(f"😌  Eyes-closed relax FIRED — alpha power={_fa_pow_now:.1f}µV² "
+                              f"({_fa_ratio:.2f}x baseline={_fa_baseline:.1f})")
+                        try:
+                            self.on_eyes_closed_relax()
+                        except Exception as _e:
+                            print(f"⚠️  on_eyes_closed_relax error: {_e}")
+
                 self.engine.set_eeg(ema_a, ema_b, ema_t, tbr=ema_tbr, tbr_raw=ema_tbr_raw,
                                     frontal_alpha=ema_fa, frontal_theta=ema_ft)
 
@@ -638,7 +818,11 @@ class MuseConnector:
                         round(time.time() - _t0, 1),
                         round(ema_a, 3), round(ema_b, 3), round(ema_t, 3),
                         round(ema_tbr, 3), state_hint,
-                        round(self.heart_rate) if self.heart_rate else ''
+                        round(self.heart_rate) if self.heart_rate else '',
+                        _cmd_diag["eog_extreme"], _cmd_diag["eog_zcross"], _cmd_diag["frontal_emg"], _cmd_diag["blink_candidates"],
+                        _cmd_diag["jaw_p2p_tp9"], _cmd_diag["jaw_p2p_tp10"], _cmd_diag["jaw_streak"],
+                        _cmd_diag["alpha_pow"], _cmd_diag["alpha_baseline"], _cmd_diag["alpha_ratio"], _cmd_diag["relax_streak"],
+                        _cmd_diag["cmd_fired"],
                     ])
                     _csv_file.flush()
 

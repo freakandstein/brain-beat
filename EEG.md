@@ -7,10 +7,13 @@
 | **music_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, 3-state calm/flow/tense, adaptive threshold (60s warm-up), tense_level build-up, flow_score dari frontal EEG |
 | **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR + eyebrow_raise event |
 | **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar, SIGNAL, CONS, warming-up indicator, EEG channel map, waveform Hz display, status reconnecting |
-| **Overlay FX (overlay.html)** | ✅ Selesai | Full-screen visual FX saat eyebrow raise terdeteksi — electric arc, scan line, edge glow, auto-hide 2.8s |
+| **Overlay FX (overlay_mental_command.html)** | ✅ Selesai | Full-screen visual FX per command — electric arc, scan line, edge glow, auto-hide 2.8s, 3 warna berbeda |
+| **Mental Command Playground** | ✅ Selesai | 3 active commands via `/overlay/mental-command` — wink, jaw clench, eyebrow raise, masing-masing warna berbeda |
 | **State detection** | ✅ Selesai | 3-state calm/flow/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
 | **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
 | **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 >350µV + symmetry check (ratio <3.0) + cooldown 3s — active command via frontal EMG |
+| **Wink detection** | ✅ Selesai | Unilateral: satu sisi AF7/AF8 >200µV + asimetri ratio >4.0 + NOT bilateral — Command A playground |
+| **Jaw clench detection** | ✅ Selesai | TP9/TP10 EMG p2p >600µV sustained ≥2 tick + guard frontal bleed — Command B playground |
 | **Auto-reconnect** | ✅ Selesai | Jika koneksi Muse putus, retry otomatis dengan backoff 3s→5s→10s→15s, status reconnecting di UI |
 | **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
 | **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
@@ -155,12 +158,12 @@ HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAIN BEAT MONITOR" — BPM, HR, 
     ↓                                      warming-up indicator, EEG channel map SVG,
     ↓                                      waveform canvas θ/α/β + Hz centroid per band
     ↓                                      status: connecting / reconnecting / connected / error
-Overlay FX                    ← [✅ Impl.] templates/overlay.html — http://localhost:8765/overlay
-(templates/overlay.html)                   Triggered by eyebrow_raise event via SocketIO
+Overlay FX                    ← [✅ Impl.] templates/overlay_mental_command.html — http://localhost:8765/overlay/mental-command
+(templates/overlay_mental_command.html)                   Triggered by wink / jaw_clench / eyebrow_raise events via SocketIO
     ↓                                      Visual: electric arc + scan line + edge glow + center text
     ↓                                      Auto-hide setelah 2.8s, fade-out 1.4s
 OBS Browser Source            ← index.html: monitor overlay (port 8765)
-                                 overlay.html: eyebrow raise FX layer (di atas game capture)
+                                 overlay_mental_command.html: mental command overlay (/overlay/mental-command)
 ```
 
 ### Kenapa HTML Browser Source (bukan aplikasi desktop)?
@@ -279,8 +282,9 @@ Tiap sesi mencakup fase berikut secara bergantian:
 | **Fase 2** | ✅ Selesai | Integrasi Muse 2 realtime — BLE acquisition, EMG rejection, vote buffer, PPG heart rate |
 | **Fase 3** | ✅ Selesai | Overlay OBS live — kalibrasi threshold, signal quality, warming-up indicator, waveform display |
 | **Fase 4a** | ✅ Selesai | Active command via eyebrow raise — bilateral AF7+AF8 EMG detection, overlay FX, auto-reconnect |
-| **Fase 4b** | 🔲 Next | Rekam dataset personal 3–7 sesi, train ML classifier (SVM/LDA) sebagai upgrade dari threshold |
-| **Fase 5** | 🔲 Planned | Eksplorasi active command lain (SSVEP, alpha command) — disesuaikan dengan game |
+| **Fase 4b** | ✅ Selesai | Mental Command Playground — 3 commands (wink, jaw clench, eyebrow raise) semua reliable |
+| **Fase 5** | 🔲 Next | Rekam dataset personal 3–7 sesi, train ML classifier (SVM/LDA) sebagai upgrade dari threshold |
+| **Fase 6** | 🔲 Planned | Integrasi active command ke gameplay nyata — disesuaikan dengan game yang dimainkan |
 
 ---
 

@@ -67,9 +67,9 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/overlay")
-def overlay():
-    return render_template("overlay.html")
+@app.route("/overlay/mental-command")
+def overlay_mental_command():
+    return render_template("overlay_mental_command.html")
 
 
 # ── socket events ─────────────────────────────────────────────────────────────
@@ -215,8 +215,23 @@ def main():
             print("⚡  Eyebrow raise detected — triggering overlay")
             socketio.emit("eyebrow_raise", {})
 
+        def _wink_cb():
+            print("😉  Wink detected — triggering overlay")
+            socketio.emit("wink", {})
+
+        def _jaw_clench_cb():
+            print("🦷  Jaw clench detected — triggering overlay")
+            socketio.emit("jaw_clench", {})
+
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         muse.on_eyebrow_raise = _eyebrow_cb
+        muse.on_wink          = _wink_cb
+        muse.on_jaw_clench    = _jaw_clench_cb
+        # Catatan: eyes_closed_relax tidak lagi dipakai playground (diganti
+        # eyebrow_raise — gesture cepat & deliberate, lebih konsisten dgn
+        # double-blink & jaw clench dibanding "merem-relaks 2 detik" yg
+        # bersifat sustained-passive). Detector tetap ada di MuseConnector
+        # (sudah teruji), tapi callback-nya sengaja tidak di-wire di sini.
         print("✅  BrainFlow siap. Tekan 'Hubungkan Muse 2' di browser.")
     else:
         print("⚠️   brainflow tidak terinstall — koneksi Muse 2 tidak tersedia.")
