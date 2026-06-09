@@ -24,16 +24,16 @@ body {
     min-height: 100vh;
     display: flex;
     justify-content: center;
-    padding: 24px 16px 40px;
+    padding: 12px 12px 24px;
 }
 
 .container {
     width: 100%;
-    max-width: 580px;
+    max-width: 620px;
 }
 
 /* ── Header ─────────────────────────────────────────── */
-.header { padding: 8px 0 14px; }
+.header { padding: 4px 0 8px; }
 .header h1 {
     font-size: 1.45rem;
     font-weight: 800;
@@ -52,46 +52,42 @@ body {
     width: 7px; height: 7px;
     border-radius: 50%;
     background: #4b5563;
-    animation: none;
     flex-shrink: 0;
     transition: background 0.4s;
 }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
 
 /* ── Divider ─────────────────────────────────────────── */
-.divider { height: 1px; background: var(--border); margin: 10px 0; }
+.divider { height: 1px; background: var(--border); margin: 6px 0; }
 
-/* ── State card ─────────────────────────────────────── */
-.state-card {
+/* ── Main Card ──────────────────────────────────────── */
+.main-card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 20px 22px;
-    margin: 10px 0 14px;
-    display: flex;
-    gap: 16px;
-    align-items: flex-start;
-}
-.state-card-left { flex: 1; min-width: 0; }
-.state-card-right {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-}
-.state-card-right .sq-label {
-    font-family: 'Courier New', monospace;
-    font-size: 0.6rem;
-    letter-spacing: 0.12em;
-    color: var(--dim);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin: 6px 0 10px;
 }
 
+/* ── State row ──────────────────────────────────────── */
 .state-row {
     display: flex;
-    align-items: baseline;
-    gap: 14px;
-    margin-bottom: 14px;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.state-row-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.hr-badge {
+    font-family: 'Courier New', monospace;
+    font-size: 0.92rem;
+    color: #fb7185;
 }
 #state-badge {
     font-family: 'Courier New', Courier, monospace;
@@ -108,9 +104,7 @@ body {
 }
 
 /* ── Spectrum slider ─────────────────────────────────── */
-.spectrum-wrap {
-    margin: 14px 0 10px;
-}
+.spectrum-wrap { margin-bottom: 10px; }
 .spectrum-labels {
     display: flex;
     justify-content: space-between;
@@ -131,7 +125,6 @@ body {
     background: linear-gradient(90deg, #4ade80 0%, #facc15 50%, #c084fc 100%);
     margin-bottom: 6px;
 }
-/* flow zone highlight: 35%–65% */
 .spectrum-flow-zone {
     position: absolute;
     top: -3px;
@@ -163,132 +156,110 @@ body {
     padding: 0 2px;
 }
 
-/* ── Flow score bar ──────────────────────────────────── */
-.bar-fill.flow-score { background: linear-gradient(90deg, #a3e635, #facc15, #fb923c); }
 
-.metrics-row {
-    display: flex;
-    gap: 28px;
-    margin-bottom: 12px;
-}
-.metric-label {
-    font-family: 'Courier New', monospace;
-    font-size: 0.65rem;
-    letter-spacing: 0.12em;
-    color: var(--dim);
-    display: block;
-    margin-bottom: 2px;
-}
-.metric-value {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 1.4rem;
-    font-weight: 700;
-    color: var(--text);
-}
-
-/* ── Bar / Meter ─────────────────────────────────────── */
-.bar-row {
+/* ── Mental Command ─────────────────────────────────── */
+.mental-inline {
     display: flex;
     align-items: center;
-    gap: 10px;
-}
-.bar-label {
-    font-family: 'Courier New', monospace;
-    font-size: 0.65rem;
-    letter-spacing: 0.1em;
-    color: var(--dim);
-    width: 38px;
-    flex-shrink: 0;
-}
-.bar-track {
-    flex: 1;
-    height: 6px;
-    background: #1e293b;
-    border-radius: 3px;
-    overflow: hidden;
-}
-.bar-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.12s linear;
-    width: 0%;
-}
-.bar-fill.build        { background: linear-gradient(90deg, #f59e0b, #ef4444); }
-.bar-fill.stress-build { background: linear-gradient(90deg, #ef4444, #7f1d1d); }
-.bar-fill.alpha  { background: linear-gradient(90deg, #1d4ed8, #60a5fa); }
-.bar-fill.beta   { background: linear-gradient(90deg, #6d28d9, #a78bfa); }
-.bar-fill.theta  { background: linear-gradient(90deg, #065f46, #34d399); }
-
-.bar-val {
-    font-family: 'Courier New', monospace;
-    font-size: 0.78rem;
-    color: var(--dim);
-    width: 36px;
+    gap: 7px;
+    border-radius: 6px;
+    padding: 3px 5px 3px 3px;
+    transition: background 0.3s;
     text-align: right;
+}
+.mental-inline.flash {
+    background: #4ade8010;
+}
+.mental-scene {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: #4ade80;
+    white-space: nowrap;
+}
+.mental-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #3f3f46;
     flex-shrink: 0;
+    transition: background 0.2s, box-shadow 0.2s;
+}
+.mental-dot.active {
+    background: #4ade80;
+    box-shadow: 0 0 8px #4ade8080;
 }
 
-/* ── EEG Channels ───────────────────────────────────── */
-.section-title {
+/* ── EEG + Map row ───────────────────────────────────── */
+.eeg-map-row {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+}
+.eeg-channels { flex: 1; min-width: 0; }
+
+.section-label {
     font-family: 'Courier New', monospace;
-    font-size: 0.65rem;
+    font-size: 0.6rem;
     letter-spacing: 0.15em;
     color: var(--dim);
-    margin-bottom: 10px;
-}
-
-.channel { margin-bottom: 16px; }
-.channel-name {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 0.88rem;
-    font-weight: 700;
     margin-bottom: 6px;
-    display: block;
 }
-.channel-name.delta { color: #fb923c; }
-.channel-name.alpha { color: #60a5fa; }
-.channel-name.beta  { color: #a78bfa; }
-.channel-name.theta { color: #34d399; }
-.hz-label { font-size: 0.6rem; font-weight: 400; opacity: 0.55; margin-left: 5px; }
 
-.channel .bar-track { height: 8px; }
-
-/* ── Waveform ────────────────────────────────────────── */
+/* ── EEG Waveforms ───────────────────────────────────── */
+.channel { margin-bottom: 8px; }
+.channel:last-child { margin-bottom: 0; }
 .channel-header {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
+.channel-name {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+.channel-name.alpha { color: #60a5fa; }
+.channel-name.beta  { color: #a78bfa; }
+.channel-name.theta { color: #34d399; }
+.hz-label { font-size: 0.58rem; font-weight: 400; opacity: 0.55; margin-left: 5px; }
 .waveform-canvas {
     width: 100%;
-    height: 55px;
+    height: 48px;
     display: block;
     border-radius: 6px;
 }
 
-/* ── Footer ──────────────────────────────────────────── */
-.footer {
-    margin-top: 20px;
-    padding: 10px 14px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    font-size: 0.75rem;
-    color: var(--dim);
-    line-height: 1.6;
+/* ── EEG Channel Map ─────────────────────────────────── */
+.map-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
 }
-.footer code {
-    background: var(--accent);
-    padding: 1px 5px;
-    border-radius: 3px;
+.sq-label {
     font-family: 'Courier New', monospace;
-    font-size: 0.72rem;
-    color: #a78bfa;
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+    color: var(--dim);
+}
+.head-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.64rem;
+    color: var(--dim);
+}
+.head-legend span { display: flex; align-items: center; gap: 5px; }
+.head-legend i {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
 }
 
-
-/* ── Muse 2 panel ────────────────────────────────────── */
+/* ── Muse panel ──────────────────────────────────────── */
 .muse-panel {
     background: var(--card);
     border: 1px solid var(--border);
@@ -370,34 +341,6 @@ body {
 .muse-device-item:hover { border-color: #4ade80; }
 .muse-device-name { color: var(--text); font-weight: 600; }
 .muse-device-addr { color: var(--dim); font-family: monospace; font-size: 0.72rem; }
-.muse-hint {
-    font-size: 0.72rem;
-    color: var(--dim);
-    line-height: 1.55;
-}
-
-/* ── EEG Head Diagram ───────────────────────────────── */
-.head-diagram-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 0 4px;
-}
-.head-diagram-wrap svg { overflow: visible; }
-.head-legend {
-    display: flex;
-    gap: 14px;
-    font-size: 0.68rem;
-    color: var(--dim);
-    justify-content: center;
-}
-.head-legend span { display: flex; align-items: center; gap: 4px; }
-.head-legend i {
-    display: inline-block;
-    width: 9px; height: 9px;
-    border-radius: 50%;
-}
 </style>
 </head>
 
@@ -415,125 +358,107 @@ body {
 
   <div class="divider"></div>
 
-  <!-- State Card -->
-  <div class="state-card">
-    <div class="state-card-left">
-      <div class="state-row">
+  <!-- Main Card: State + Spectrum + EEG + Map -->
+  <div class="main-card">
+
+    <!-- State -->
+    <div class="state-row">
+      <div>
         <div id="state-badge">CALM</div>
         <div id="state-desc">Calm / Relaxed</div>
       </div>
-
-      <!-- Spectrum: calm ← flow → tense -->
-      <div class="spectrum-wrap">
-        <div class="spectrum-labels">
-          <span class="spectrum-label calm">CALM</span>
-          <span class="spectrum-label flow">⬡ FLOW ZONE</span>
-          <span class="spectrum-label tense">TENSE</span>
+      <div class="state-row-right">
+        <div class="hr-badge">&#9829; <span id="hr-val">—</span></div>
+        <div class="mental-inline" id="mental-card" style="display:none">
+          <div class="mental-dot" id="mental-dot"></div>
+          <div class="mental-scene" id="mental-scene"></div>
         </div>
-        <div class="spectrum-track">
-          <div class="spectrum-flow-zone"></div>
-          <div class="spectrum-cursor" id="spectrum-cursor" style="left:20%"></div>
-        </div>
-        <div class="spectrum-sublabels">
-          <span>relaxed</span>
-          <span>engaged calm</span>
-          <span>aroused</span>
-        </div>
-      </div>
-
-      <div class="metrics-row">
-        <div>
-          <span class="metric-label">BPM</span>
-          <span class="metric-value" id="bpm-val">72.0</span>
-        </div>
-        <div>
-          <span class="metric-label">HR</span>
-          <span class="metric-value" id="hr-val" style="color:#fb7185">—</span>
-        </div>
-      </div>
-
-      <div class="bar-row">
-        <span class="bar-label">TENSE</span>
-        <div class="bar-track">
-          <div class="bar-fill build" id="build-bar"></div>
-        </div>
-        <span class="bar-val" id="build-pct">0%</span>
-      </div>
-      <div class="bar-row" id="stress-build-row" style="display:none">
-        <span class="bar-label" style="color:#ef4444">TENSION</span>
-        <div class="bar-track">
-          <div class="bar-fill stress-build" id="stress-build-bar"></div>
-        </div>
-        <span class="bar-val" id="stress-build-pct">0%</span>
-      </div>
-      <div class="bar-row">
-        <span class="bar-label" id="conf-label" style="color:#94a3b8">SIGNAL</span>
-        <div class="bar-track">
-          <div class="bar-fill" id="conf-bar" style="background:#94a3b8;width:0%"></div>
-        </div>
-        <span class="bar-val" id="conf-pct">0%</span>
       </div>
     </div>
 
-    <div class="state-card-right">
-      <span class="sq-label">EEG CHANNEL MAP</span>
-      <svg viewBox="0 0 200 210" width="130" height="137">
-        <circle cx="100" cy="112" r="82" fill="none" stroke="#2a2a4a" stroke-width="1.5"/>
-        <path d="M93,31 L100,22 L107,31" fill="none" stroke="#2a2a4a" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M18,112 Q10,112 10,106 Q10,100 18,100" fill="none" stroke="#2a2a4a" stroke-width="1.2"/>
-        <path d="M182,112 Q190,112 190,106 Q190,100 182,100" fill="none" stroke="#2a2a4a" stroke-width="1.2"/>
-        <circle id="eq-AF7" cx="64" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
-        <text x="64" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF7</text>
-        <circle id="eq-AF8" cx="136" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
-        <text x="136" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF8</text>
-        <circle id="eq-TP9" cx="21" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
-        <text x="21" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP9</text>
-        <circle id="eq-TP10" cx="179" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
-        <text x="179" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP10</text>
-      </svg>
-      <div class="head-legend">
-        <span><i style="background:#4ade80"></i>Good</span>
-        <span><i style="background:#fbbf24"></i>Weak</span>
-        <span><i style="background:#f87171"></i>Poor</span>
-        <span><i style="background:#3f3f46"></i>Off</span>
+    <!-- Spectrum -->
+    <div class="spectrum-wrap">
+      <div class="spectrum-labels">
+        <span class="spectrum-label calm">CALM</span>
+        <span class="spectrum-label flow">⬡ FLOW ZONE</span>
+        <span class="spectrum-label tense">TENSE</span>
+      </div>
+      <div class="spectrum-track">
+        <div class="spectrum-flow-zone"></div>
+        <div class="spectrum-cursor" id="spectrum-cursor" style="left:20%"></div>
+      </div>
+      <div class="spectrum-sublabels">
+        <span>relaxed</span>
+        <span>engaged calm</span>
+        <span>aroused</span>
       </div>
     </div>
-  </div>
 
-  <!-- EEG Channels -->
-  <div class="section-title">EEG CHANNELS</div>
+    <!-- EEG Channels + Map -->
+    <div class="eeg-map-row">
 
-  <!-- Theta -->
-  <div class="channel">
-    <div class="channel-header">
-      <span class="channel-name theta">θ &nbsp;theta<span class="hz-label">4–8 Hz</span></span>
-      <span id="theta-val" style="font-family:monospace;font-size:0.78rem;color:#34d399">—</span>
+      <!-- Waveforms -->
+      <div class="eeg-channels">
+        <div class="section-label">EEG CHANNELS</div>
+
+        <div class="channel">
+          <div class="channel-header">
+            <span class="channel-name theta">θ &nbsp;theta<span class="hz-label">4–8 Hz</span></span>
+            <span id="theta-val" style="font-family:monospace;font-size:0.75rem;color:#34d399">—</span>
+          </div>
+          <canvas id="theta-wave" class="waveform-canvas"></canvas>
+        </div>
+
+        <div class="channel">
+          <div class="channel-header">
+            <span class="channel-name alpha">α &nbsp;alpha<span class="hz-label">8–13 Hz</span></span>
+            <span id="alpha-val" style="font-family:monospace;font-size:0.75rem;color:#60a5fa">—</span>
+          </div>
+          <canvas id="alpha-wave" class="waveform-canvas"></canvas>
+        </div>
+
+        <div class="channel">
+          <div class="channel-header">
+            <span class="channel-name beta">β &nbsp;beta<span class="hz-label">13–25 Hz</span></span>
+            <span id="beta-val" style="font-family:monospace;font-size:0.75rem;color:#a78bfa">—</span>
+          </div>
+          <canvas id="beta-wave" class="waveform-canvas"></canvas>
+        </div>
+      </div>
+
+      <!-- EEG Channel Map -->
+      <div class="map-col">
+        <span class="sq-label">EEG CHANNEL MAP</span>
+        <svg viewBox="0 0 200 210" width="120" height="126">
+          <circle cx="100" cy="112" r="82" fill="none" stroke="#2a2a4a" stroke-width="1.5"/>
+          <path d="M93,31 L100,22 L107,31" fill="none" stroke="#2a2a4a" stroke-width="1.5" stroke-linejoin="round"/>
+          <path d="M18,112 Q10,112 10,106 Q10,100 18,100" fill="none" stroke="#2a2a4a" stroke-width="1.2"/>
+          <path d="M182,112 Q190,112 190,106 Q190,100 182,100" fill="none" stroke="#2a2a4a" stroke-width="1.2"/>
+          <circle id="eq-AF7" cx="64" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+          <text x="64" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF7</text>
+          <circle id="eq-AF8" cx="136" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+          <text x="136" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF8</text>
+          <circle id="eq-TP9" cx="21" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+          <text x="21" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP9</text>
+          <circle id="eq-TP10" cx="179" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+          <text x="179" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP10</text>
+        </svg>
+        <div class="head-legend">
+          <span><i style="background:#4ade80"></i>Good</span>
+          <span><i style="background:#fbbf24"></i>Weak</span>
+          <span><i style="background:#f87171"></i>Poor</span>
+          <span><i style="background:#3f3f46"></i>Off</span>
+        </div>
+      </div>
+
     </div>
-    <canvas id="theta-wave" class="waveform-canvas"></canvas>
-  </div>
 
-  <!-- Alpha -->
-  <div class="channel">
-    <div class="channel-header">
-      <span class="channel-name alpha">α &nbsp;alpha<span class="hz-label">8–13 Hz</span></span>
-      <span id="alpha-val" style="font-family:monospace;font-size:0.78rem;color:#60a5fa">—</span>
-    </div>
-    <canvas id="alpha-wave" class="waveform-canvas"></canvas>
-  </div>
-
-  <!-- Beta -->
-  <div class="channel">
-    <div class="channel-header">
-      <span class="channel-name beta">β &nbsp;beta<span class="hz-label">13–25 Hz</span></span>
-      <span id="beta-val" style="font-family:monospace;font-size:0.78rem;color:#a78bfa">—</span>
-    </div>
-    <canvas id="beta-wave" class="waveform-canvas"></canvas>
   </div>
 
   <div class="divider"></div>
 
   <!-- Muse 2 Connection -->
-  <div class="section-title">BCI Device</div>
+  <div class="section-label" style="margin-bottom:8px">BCI DEVICE</div>
   <div class="muse-panel">
     <div class="muse-status-row">
       <span class="muse-dot" id="muse-dot"></span>
@@ -545,8 +470,6 @@ body {
     </div>
     <div class="muse-device-list" id="muse-device-list"></div>
   </div>
-
-
 
 </div><!-- /container -->
 
@@ -568,10 +491,8 @@ socket.on('disconnect', () => {
 });
 
 socket.on('state_update', (d) => {
-  // ── Spectrum position & state badge ───────────────────────────────────
-  const sp = d.spectrum_pos ?? 0.2;  // 0=calm, 0.5=flow, 1=tense
+  const sp = d.spectrum_pos ?? 0.2;
 
-  // Badge sepenuhnya ikut spectrum_pos — selalu konsisten dengan slider
   let displayState, color, desc;
   if (sp > 0.65) {
     displayState = 'TENSE'; color = '#c084fc'; desc = 'Tense / Aroused';
@@ -586,60 +507,30 @@ socket.on('state_update', (d) => {
   badge.style.textShadow = `0 0 24px ${color}80`;
   document.getElementById('state-desc').textContent = desc;
 
-  // Move spectrum cursor
   document.getElementById('spectrum-cursor').style.left = (sp * 100) + '%';
+  document.getElementById('hr-val').textContent = d.heart_rate ? d.heart_rate + ' bpm' : '—';
 
-  // Metrics
-  document.getElementById('bpm-val').textContent = d.bpm.toFixed(1);
-  document.getElementById('hr-val').textContent  = d.heart_rate ? d.heart_rate + ' bpm' : '—';
-
-  // Tense build bar
-  const tl = d.tense_level || 0;
-  document.getElementById('build-bar').style.width = (tl * 100) + '%';
-  document.getElementById('build-pct').textContent = Math.round(tl * 100) + '%';
-  document.getElementById('stress-build-row').style.display = 'none';
-
-  // Confidence bar — sembunyikan saat device tidak connected
-  const museOk = (d.muse === 'connected');
-  const cf = museOk ? (d.confidence || 0) : 0;
-  const cfColor = cf > 0.66 ? '#4ade80' : cf > 0.33 ? '#fbbf24' : '#f87171';
-  document.getElementById('conf-bar').style.width  = (cf * 100) + '%';
-  document.getElementById('conf-bar').style.background = cfColor;
-  document.getElementById('conf-pct').textContent  = museOk ? Math.round(cf * 100) + '%' : '—';
-  document.getElementById('conf-label').style.color = museOk ? cfColor : '#94a3b8';
-
-  // EEG waveforms + dominant Hz display
   function toDb(v) { return 10 * Math.log10(Math.max(v, 1e-10)); }
   function fmtHz(hz) { return (hz != null) ? hz.toFixed(1) + ' Hz' : '—'; }
   if (d.theta_raw != null) { waves.theta.push(Math.max(toDb(d.theta_raw), 0)); document.getElementById('theta-val').textContent = fmtHz(d.theta_hz); }
   if (d.alpha_raw != null) { waves.alpha.push(Math.max(toDb(d.alpha_raw), 0)); document.getElementById('alpha-val').textContent = fmtHz(d.alpha_hz); }
   if (d.beta_raw  != null) { waves.beta.push(Math.max(toDb(d.beta_raw),  0)); document.getElementById('beta-val').textContent  = fmtHz(d.beta_hz);  }
 
-  // Sync muse dot jika halaman di-refresh saat sudah terhubung
   if (d.muse === 'connected' && !museConnected && !museDisconnecting) {
     setMuseUI('connected', '✅ Muse 2 connected');
   }
 
-  // EEG channel quality diagram
   updateHeadDiagram(d.channel_quality, d.muse === 'connected');
 });
 
 // ── EEG Head Diagram ──────────────────────────────────────────────────────
 function updateHeadDiagram(quality, connected) {
-  const channels = ['AF7', 'AF8', 'TP9', 'TP10'];
-  channels.forEach(name => {
+  ['AF7', 'AF8', 'TP9', 'TP10'].forEach(name => {
     const el = document.getElementById('eq-' + name);
     if (!el) return;
-    if (!connected || quality === null) {
-      el.setAttribute('fill', '#3f3f46');
-      return;
-    }
+    if (!connected || quality === null) { el.setAttribute('fill', '#3f3f46'); return; }
     const q = quality[name] ?? 0;
-    let color;
-    if (q >= 0.7)      color = '#4ade80';  // baik
-    else if (q >= 0.35) color = '#fbbf24';  // lemah
-    else                color = '#f87171';  // buruk
-    el.setAttribute('fill', color);
+    el.setAttribute('fill', q >= 0.7 ? '#4ade80' : q >= 0.35 ? '#fbbf24' : '#f87171');
   });
 }
 
@@ -648,7 +539,6 @@ let museConnected     = false;
 let museDisconnecting = false;
 
 function toggleMuse() {
-  // Only called when connected (Disconnect button)
   if (!museConnected) return;
   museDisconnecting = true;
   socket.emit('muse_disconnect');
@@ -670,12 +560,9 @@ function connectDevice(name, address) {
   socket.emit('muse_connect', { address: address });
   setMuseUI('connecting', 'Connecting to ' + name + '...');
   document.getElementById('muse-device-list').innerHTML = '';
-  // Safety timeout: if no status update in 45 s, reset UI so user can retry
   clearTimeout(_connectTimeout);
   _connectTimeout = setTimeout(() => {
-    if (!museConnected) {
-      setMuseUI('error', '❌ Connection timeout — retry?');
-    }
+    if (!museConnected) setMuseUI('error', '❌ Connection timeout — retry?');
   }, 45000);
 }
 
@@ -696,27 +583,22 @@ function setMuseUI(status, text) {
     scanBtn.disabled         = true;
     scanBtn.textContent      = status === 'reconnecting' ? '🔄 Reconnecting...' : '⏳ Connecting...';
   } else {
-    // disconnected / error / unavailable
     connectBtn.style.display = 'none';
     scanBtn.style.display    = '';
     scanBtn.disabled         = false;
-    scanBtn.textContent      = '\uD83D\uDD0D Scan Devices';
+    scanBtn.textContent      = '🔍 Scan Devices';
     if (status === 'disconnected') {
       document.getElementById('muse-device-list').innerHTML = '';
     }
   }
-
 }
 
 socket.on('muse_scan_result', (d) => {
   const scanBtn = document.getElementById('muse-scan-btn');
   const list    = document.getElementById('muse-device-list');
-
-  if (d.scanning) return;  // intermediate "searching" state
-
+  if (d.scanning) return;
   scanBtn.disabled = false;
-  scanBtn.textContent = '\uD83D\uDD0D Scan';
-
+  scanBtn.textContent = '🔍 Scan';
   if (d.error) {
     list.innerHTML = `<div style="font-size:0.75rem;color:#f87171;padding:4px 2px">${d.error}</div>`;
     return;
@@ -732,6 +614,38 @@ socket.on('muse_scan_result', (d) => {
      </div>`
   ).join('');
 });
+
+// ── Mental Commands ────────────────────────────────────────────────────────
+const mentalScenes = {
+  wink:         'Scene 1',
+  jaw_clench:   'Scene 2',
+  eyebrow_raise:'Scene 3',
+};
+
+let _mentalFlashTimer = null;
+
+function triggerMental(event) {
+  const scene = mentalScenes[event] || 'Scene ?';
+  const card  = document.getElementById('mental-card');
+  const dot   = document.getElementById('mental-dot');
+  const el    = document.getElementById('mental-scene');
+
+  el.textContent = scene + ' by brain signal';
+  card.style.display = '';
+  dot.classList.add('active');
+  card.classList.add('flash');
+
+  clearTimeout(_mentalFlashTimer);
+  _mentalFlashTimer = setTimeout(() => {
+    card.style.display = 'none';
+    dot.classList.remove('active');
+    card.classList.remove('flash');
+  }, 2500);
+}
+
+socket.on('wink',          () => triggerMental('wink'));
+socket.on('jaw_clench',    () => triggerMental('jaw_clench'));
+socket.on('eyebrow_raise', () => triggerMental('eyebrow_raise'));
 
 socket.on('muse_status', (d) => {
   clearTimeout(_connectTimeout);
@@ -756,8 +670,8 @@ class Waveform {
     this.ctx      = this.canvas.getContext('2d');
     this.color    = color;
     this.buf      = [];
-    this.MAX      = 120;  // 2 min at 1 Hz
-    this.scaleMax = 1; // dB scale — auto-expands on first data
+    this.MAX      = 120;
+    this.scaleMax = 1;
     this._dw      = 1;
     this._dh      = 1;
     this._resize();
@@ -783,10 +697,8 @@ class Waveform {
   draw() {
     const ctx = this.ctx, W = this._dw, H = this._dh;
     ctx.clearRect(0, 0, W, H);
-    // background
     ctx.fillStyle = '#1e293b';
     ctx.fillRect(0, 0, W, H);
-    // center gridline at 0.5
     ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, H * 0.5); ctx.lineTo(W, H * 0.5); ctx.stroke();
@@ -796,7 +708,6 @@ class Waveform {
     const off = this.MAX - this.buf.length;
     const xOf = i => (off + i) * dx;
     const yOf = v => H * 0.93 - (v / scale) * H * 0.86;
-    // fill area
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, this.color + '55');
     grad.addColorStop(1, this.color + '08');
@@ -807,7 +718,6 @@ class Waveform {
     ctx.closePath();
     ctx.fillStyle = grad;
     ctx.fill();
-    // stroke line
     ctx.beginPath();
     this.buf.forEach((v, i) => {
       i === 0 ? ctx.moveTo(xOf(0), yOf(v)) : ctx.lineTo(xOf(i), yOf(v));
