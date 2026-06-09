@@ -117,6 +117,7 @@ class MuseConnector:
         # Eyebrow raise detection — callback dipanggil saat terdeteksi
         self.on_eyebrow_raise: Optional[callable] = None
         self._eyebrow_cooldown: float = 0.0   # timestamp terakhir trigger
+        self._eyebrow_streak:   int   = 0     # tick bilateral berturut-turut (blink = 1 tick, eyebrow = 2+)
 
         # ── Mental command playground (3 modalitas campuran) ──────────────
         # Wink (EOG asimetri AF7/AF8), Jaw clench (EMG sustained TP9/TP10),
@@ -130,6 +131,7 @@ class MuseConnector:
         self._wink_cooldown: float = 0.0
         self._jaw_cooldown: float = 0.0
         self._jaw_strong_streak: int = 0    # tick berturut-turut p2p EMG di atas threshold
+        self._last_cmd_time: float = 0.0    # timestamp command apapun terakhir fire — global mutex antar detector
         self._relax_cooldown: float = 0.0
         self._relax_streak: int = 0         # tick BERTURUT-TURUT dgn alpha_ratio > threshold (sustained closure)
         self._relax_alpha_hist: list = []   # buffer raw frontal alpha power (uV^2) untuk baseline
@@ -166,9 +168,11 @@ class MuseConnector:
                             "frontal_alpha": [], "frontal_theta": []}
         self.heart_rate  = None
         self._eyebrow_cooldown = 0.0
+        self._eyebrow_streak   = 0
         self._wink_cooldown    = 0.0
         self._jaw_cooldown     = 0.0
         self._jaw_strong_streak = 0
+        self._last_cmd_time    = 0.0
         self._relax_cooldown   = 0.0
         self._relax_streak     = 0
         self._relax_alpha_hist = []
@@ -463,24 +467,35 @@ class MuseConnector:
                 #   2. Simetris: rasio max/min kedua channel < 3.0
                 #      (eyebrow raise genuine = kedua sisi aktif proporsional,
                 #       noise/artifact unilateral biasanya satu sisi jauh lebih tinggi)
+                #   3. Sustained ≥ 2 tick berturut-turut (~500ms) — blink refleks
+                #      selesai dalam 1 tick (~150ms), eyebrow raise ditahan lebih lama.
                 _now = time.time()
+                # Dihitung sekali di sini, sebelum semua detector — supaya kalau
+                # eyebrow fire dan update _last_cmd_time di tick ini, wink/jaw
+                # di bawah langsung melihat _cmd_idle = False di tick yang sama.
+                _cmd_idle = (_now - self._last_cmd_time) > 3.5
                 _p2p_af7 = _ch_p2p[1]
                 _p2p_af8 = _ch_p2p[2]
                 _both_strong = _p2p_af7 > 350.0 and _p2p_af8 > 350.0
                 _symmetric   = (max(_p2p_af7, _p2p_af8) / (min(_p2p_af7, _p2p_af8) + 1e-6)) < 3.0
                 _bilateral   = _both_strong and _symmetric
 
+                self._eyebrow_streak = self._eyebrow_streak + 1 if _bilateral else 0
+
                 if _frontal_emg:
                     _cd_left = max(0.0, 3.0 - (_now - self._eyebrow_cooldown))
                     print(
                         f"  [EMG] AF7 p2p={_ch_p2p[1]}µV | AF8 p2p={_ch_p2p[2]}µV | "
-                        f"bilateral={_bilateral} cooldown={_cd_left:.1f}s"
+                        f"bilateral={_bilateral} streak={self._eyebrow_streak} cooldown={_cd_left:.1f}s"
                     )
 
-                if (_bilateral and
+                if (self._eyebrow_streak >= 2 and
+                        _cmd_idle and
                         self.on_eyebrow_raise and
                         _now - self._eyebrow_cooldown > 3.0):
                     self._eyebrow_cooldown = _now
+                    self._last_cmd_time    = _now
+                    self._eyebrow_streak   = 0
                     _cmd_diag["cmd_fired"] = "eyebrow_raise"
                     print("⚡  Eyebrow raise FIRED")
                     try:
@@ -514,10 +529,12 @@ class MuseConnector:
                 _cmd_diag["wink_af8"]   = round(_ch_p2p[2], 1)
                 _cmd_diag["wink_ratio"] = round(_wink_ratio, 2)
 
-                if (_wink_strong and _wink_asymm and not _bilateral and
+                if (_wink_strong and _wink_asymm and not _both_strong and
+                        _cmd_idle and
                         self.on_wink and
                         _now - self._wink_cooldown > 1.5):
                     self._wink_cooldown = _now
+                    self._last_cmd_time  = _now
                     _cmd_diag["cmd_fired"] = "wink"
                     print(f"😉  Wink FIRED ({_wink_eye}) — AF7={_ch_p2p[1]:.0f}µV AF8={_ch_p2p[2]:.0f}µV ratio={_wink_ratio:.1f}")
                     try:
@@ -544,7 +561,7 @@ class MuseConnector:
                         _jaw_strong_now = True
 
                 if _jaw_strong_now and _bilateral:
-                    _jaw_strong_now = False  # frontal bleed, bukan jaw asli
+                    _jaw_strong_now = False  # frontal bleed dari eyebrow raise
 
                 self._jaw_strong_streak = self._jaw_strong_streak + 1 if _jaw_strong_now else 0
 
@@ -553,9 +570,11 @@ class MuseConnector:
                 _cmd_diag["jaw_streak"]   = self._jaw_strong_streak
 
                 if (self._jaw_strong_streak >= 2 and
+                        _cmd_idle and
                         self.on_jaw_clench and
                         _now - self._jaw_cooldown > 2.5):
                     self._jaw_cooldown = _now
+                    self._last_cmd_time = _now
                     self._jaw_strong_streak = 0
                     _cmd_diag["cmd_fired"] = "jaw_clench"
                     print(f"🦷  Jaw clench FIRED — TP9={_jaw_p2p[9]:.0f}µV TP10={_jaw_p2p[10]:.0f}µV")

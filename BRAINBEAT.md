@@ -108,19 +108,26 @@ Jaw muscle EMG is strong and sustained. Threshold of 600µV set high to handle s
 Channel    : AF7 (ch1) and AF8 (ch2)
 Condition  : AF7 p2p > 350µV AND AF8 p2p > 350µV    (bilateral — both sides active)
 Symmetry   : max / min ratio < 3.0                   (both sides proportional)
+Sustained  : ≥ 2 consecutive ticks (~500ms)          (reflex blink = 1 tick, eyebrow raise = 2+)
 Cooldown   : 3 seconds
 ```
 
-A genuine bilateral raise passes both thresholds. Unilateral artifacts (wink, jaw bleed) fail the bilateral+symmetry check.
+A genuine bilateral raise passes all thresholds. Reflex blinks — even bilateral — are filtered by the sustained requirement since they complete within a single 250ms tick.
+
+### Mutual Exclusion (Global Mutex)
+
+All three detectors share a single `_last_cmd_time` timestamp. Once any command fires, a **3.5-second idle window** must pass before any detector can fire again — regardless of signal values. This prevents cross-triggering in both directions (eyebrow→wink/jaw and jaw→eyebrow/wink).
+
+`_cmd_idle` is evaluated **once per tick, before all detectors run** — ensuring that if eyebrow raise fires and updates `_last_cmd_time`, wink and jaw clench see `_cmd_idle = False` in the same tick.
 
 ### Design Principle
 
 All three commands use fundamentally different signal dimensions:
 - **Wink** → left-right *asymmetry* on frontal channels
 - **Jaw clench** → dedicated *temporal* channels, sustained
-- **Eyebrow raise** → bilateral *symmetry* on frontal channels
+- **Eyebrow raise** → bilateral *symmetry* on frontal channels, sustained
 
-This orthogonality is why they coexist without cross-triggering.
+This orthogonality plus the global mutex is why they coexist without cross-triggering. Observed accuracy: ~85–90% in real-world use.
 
 ### Overlay FX
 

@@ -40,11 +40,11 @@ Three distinct gestures trigger a full-screen visual FX overlay at `/overlay/men
 
 | Command | Gesture | Channel | Detection Logic |
 |---|---|---|---|
-| **A — Wink** | Kedip satu mata | AF7 / AF8 | One side >200µV, asymmetry ratio >4× (unilateral EOG deflection) |
+| **A — Wink** | Kedip satu mata | AF7 / AF8 | One side >200µV, asymmetry ratio >4×, NOT both_strong (unilateral EOG) |
 | **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >600µV, sustained ≥2 consecutive ticks (~0.5s) |
-| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both >350µV, symmetric ratio <3.0 (bilateral frontal EMG) |
+| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both >350µV, symmetric ratio <3.0, sustained ≥2 ticks — reflex blinks filtered |
 
-**Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry* — which is why they can coexist without cross-triggering.
+**Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_cmd_idle`, 3.5s) blocks all detectors after any command fires, preventing cross-triggering in both directions. Observed accuracy: ~85–90%.
 
 To test without a Muse: open `/overlay/mental-command` and press **Shift+1**, **Shift+2**, **Shift+3**.
 

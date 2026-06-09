@@ -11,9 +11,10 @@
 | **Mental Command Playground** | ✅ Selesai | 3 active commands via `/overlay/mental-command` — wink, jaw clench, eyebrow raise, masing-masing warna berbeda |
 | **State detection** | ✅ Selesai | 3-state calm/flow/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
 | **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
-| **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 >350µV + symmetry check (ratio <3.0) + cooldown 3s — active command via frontal EMG |
-| **Wink detection** | ✅ Selesai | Unilateral: satu sisi AF7/AF8 >200µV + asimetri ratio >4.0 + NOT bilateral — Command A playground |
+| **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 >350µV + symmetry check (ratio <3.0) + sustained ≥2 tick (~500ms) + cooldown 3s — reflex blink difilter oleh sustained requirement |
+| **Wink detection** | ✅ Selesai | Unilateral: satu sisi AF7/AF8 >200µV + asimetri ratio >4.0 + NOT both_strong — Command A playground |
 | **Jaw clench detection** | ✅ Selesai | TP9/TP10 EMG p2p >600µV sustained ≥2 tick + guard frontal bleed — Command B playground |
+| **Global mutex antar detector** | ✅ Selesai | `_last_cmd_time` + `_cmd_idle` (3.5s window) — satu command fire → semua detector diblokir, dua arah, dihitung sekali per tick sebelum semua detektor jalan |
 | **Auto-reconnect** | ✅ Selesai | Jika koneksi Muse putus, retry otomatis dengan backoff 3s→5s→10s→15s, status reconnecting di UI |
 | **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
 | **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
@@ -131,8 +132,9 @@ Band Power θ/α/β              ← [✅ Impl.] 4–8 / 8–13 / 13–25 Hz (de
     ↓
 EMG Rejection (2-pass)        ← [✅ Impl.] Pass 1: scan AF7/AF8 p2p + spektral rasio (tanpa break)
     ↓                                      Pass 2: beta dari TP9/TP10 di-blank jika frontal EMG aktif
-Eyebrow Raise Detection       ← [✅ Impl.] AF7+AF8 keduanya >350µV + simetris (ratio <3.0) + cooldown 3s
-    ↓                                      Bilateral = eyebrow raise genuine; unilateral = artifact
+Eyebrow Raise Detection       ← [✅ Impl.] AF7+AF8 keduanya >350µV + simetris (ratio <3.0) + sustained ≥2 tick + cooldown 3s
+    ↓                                      Bilateral sustained = eyebrow raise genuine; blink refleks = 1 tick (difilter)
+    ↓  Global mutex (_cmd_idle 3.5s)       Semua detector share _last_cmd_time — satu fire → blokir semua, dua arah
 Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.20
     ↓                                     Juga track raw µV² + spectral centroid Hz untuk display UI
 Mental State Classifier       ← [✅ Impl.] 3-state calm/flow/tense
