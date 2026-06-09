@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BrainBeat Overlay</title>
+<title>BrainBeat Overlay — Command Playground</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -27,7 +27,6 @@
     height: 100%;
   }
 
-  /* ── Center text ── */
   #center-text {
     position: absolute;
     inset: 0;
@@ -41,16 +40,14 @@
     transition: opacity 0.25s ease-out, transform 0.25s ease-out;
   }
 
-  /* Kecil di atas — label seperti readout alat ukur */
   #text-label {
     font-family: 'Courier New', monospace;
     font-size: clamp(0.65rem, 1.1vw, 1rem);
     letter-spacing: 0.35em;
-    color: #00eaff99;
     text-transform: uppercase;
+    color: var(--accent, #00eaff99);
   }
 
-  /* Teks utama */
   #text-main {
     font-family: 'Courier New', monospace;
     font-size: clamp(1.4rem, 4.5vw, 5rem);
@@ -59,41 +56,68 @@
     text-transform: uppercase;
     white-space: nowrap;
     color: #ffffff;
-    text-shadow:
-      0 0 4px  #ffffff,
-      0 0 12px #00eaff,
-      0 0 28px #00aaff,
-      0 0 55px #0077ffcc,
-      0 0 90px #0044ff99;
-    -webkit-text-stroke: 0.5px #00eaff;
     background: rgba(0, 10, 30, 0.72);
     padding: 0.2em 0.6em;
-    border-left: 2px solid #00eaff88;
-    border-right: 2px solid #00eaff88;
+    border-left: 2px solid var(--accent, #00eaff88);
+    border-right: 2px solid var(--accent, #00eaff88);
+    text-shadow:
+      0 0 4px  #ffffff,
+      0 0 12px var(--glow, #00eaff),
+      0 0 28px var(--glow, #00aaff),
+      0 0 55px var(--glow, #0077ffcc),
+      0 0 90px var(--glow, #0044ff99);
+    -webkit-text-stroke: 0.5px var(--accent, #00eaff);
   }
 
-  /* Garis bawah tipis — seperti oscilloscope readout */
   #text-sub {
     font-family: 'Courier New', monospace;
     font-size: clamp(0.55rem, 0.9vw, 0.82rem);
     letter-spacing: 0.28em;
-    color: #00eaff55;
     text-transform: uppercase;
+    color: var(--accent-dim, #00eaff55);
   }
 
   #overlay.active            { opacity: 1; }
   #overlay.active #center-text { opacity: 1; transform: translateY(0); }
   #overlay.fadeout           { transition: opacity 1.4s ease-in; opacity: 0; }
+
+  /* ── Command legend (dev/playground aid, top-left) ── */
+  #legend {
+    position: fixed;
+    top: 18px; left: 18px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    color: #ffffffaa;
+    background: rgba(0, 10, 30, 0.55);
+    border: 1px solid #ffffff22;
+    border-radius: 4px;
+    padding: 10px 14px;
+    line-height: 1.7;
+    pointer-events: none;
+  }
+  #legend b { letter-spacing: 0.15em; }
+  .leg-blink  { color: #00eaff; }
+  .leg-jaw    { color: #ff5e3a; }
+  .leg-relax  { color: #7cff6b; }
 </style>
 </head>
 <body>
+
+<div id="legend">
+  <div><b>MENTAL COMMAND PLAYGROUND</b></div>
+  <div class="leg-blink">● Wink → Command A (EOG, AF7/AF8)</div>
+  <div class="leg-jaw">● Jaw clench → Command B (EMG, TP9/TP10)</div>
+  <div class="leg-relax">● Eyebrow raise → Command C (EMG, AF7/AF8)</div>
+  <div style="opacity:0.6;margin-top:4px">dev keys: Shift+1 / Shift+2 / Shift+3 to test</div>
+</div>
 
 <div id="overlay">
   <canvas id="fx-canvas"></canvas>
   <div id="center-text">
     <span id="text-label">EEG · AF7 / AF8</span>
-    <span id="text-main">BRAIN SIGNAL RECEIVED</span>
-    <span id="text-sub">frontal cortex activation detected</span>
+    <span id="text-main">COMMAND</span>
+    <span id="text-sub">detail</span>
   </div>
 </div>
 
@@ -111,7 +135,6 @@ window.addEventListener('resize', resize);
 resize();
 
 // ── Electric arc helper ───────────────────────────────────────────────────────
-// Gambar garis zig-zag acak menyerupai percikan listrik antara dua titik
 function drawArc(x0, y0, x1, y1, color, segments, jitter) {
   const pts = [[x0, y0]];
   for (let i = 1; i < segments; i++) {
@@ -134,14 +157,14 @@ function drawArc(x0, y0, x1, y1, color, segments, jitter) {
 }
 
 // ── Corner bracket ────────────────────────────────────────────────────────────
-function drawCorners(alpha) {
+function drawCorners(alpha, hue) {
   const len = 48, thick = 2;
   const pad = 18;
-  const color = `rgba(0,234,255,${alpha})`;
+  const color = `hsla(${hue},100%,65%,${alpha})`;
   ctx.strokeStyle = color;
   ctx.lineWidth   = thick;
   ctx.shadowBlur  = 12;
-  ctx.shadowColor = '#00eaff';
+  ctx.shadowColor = color;
 
   const corners = [
     [pad, pad,  1,  1],
@@ -159,41 +182,26 @@ function drawCorners(alpha) {
   ctx.shadowBlur = 0;
 }
 
-// ── Scan line ─────────────────────────────────────────────────────────────────
-// Garis horizontal tipis yang menyapu layar sekali dari atas ke bawah
-let scanY    = -1;
-let scanning = false;
-
-// ── Edge glow — gradient tipis di tepi layar ──────────────────────────────────
-function drawEdgeGlow(alpha) {
+// ── Edge glow ─────────────────────────────────────────────────────────────────
+function drawEdgeGlow(alpha, hue) {
   const size = 120;
   const sides = [
-    // top
     { x0:0, y0:0, x1:0, y1:size, hor: true },
-    // bottom
     { x0:0, y0:H, x1:0, y1:H-size, hor: true },
-    // left
     { x0:0, y0:0, x1:size, y1:0, hor: false },
-    // right
     { x0:W, y0:0, x1:W-size, y1:0, hor: false },
   ];
 
   for (const s of sides) {
     let g;
-    if (s.hor) {
-      g = ctx.createLinearGradient(0, s.y0, 0, s.y1);
-    } else {
-      g = ctx.createLinearGradient(s.x0, 0, s.x1, 0);
-    }
-    g.addColorStop(0,   `rgba(0,180,255,${alpha * 0.45})`);
-    g.addColorStop(0.4, `rgba(0,100,255,${alpha * 0.15})`);
-    g.addColorStop(1,   `rgba(0,0,0,0)`);
+    if (s.hor) g = ctx.createLinearGradient(0, s.y0, 0, s.y1);
+    else       g = ctx.createLinearGradient(s.x0, 0, s.x1, 0);
+    g.addColorStop(0,   `hsla(${hue},100%,55%,${alpha * 0.45})`);
+    g.addColorStop(0.4, `hsla(${hue},100%,45%,${alpha * 0.15})`);
+    g.addColorStop(1,   `hsla(${hue},100%,45%,0)`);
     ctx.fillStyle = g;
-    if (s.hor) {
-      ctx.fillRect(0, Math.min(s.y0, s.y1), W, size);
-    } else {
-      ctx.fillRect(Math.min(s.x0, s.x1), 0, size, H);
-    }
+    if (s.hor) ctx.fillRect(0, Math.min(s.y0, s.y1), W, size);
+    else       ctx.fillRect(Math.min(s.x0, s.x1), 0, size, H);
   }
 }
 
@@ -201,9 +209,9 @@ function drawEdgeGlow(alpha) {
 let arcs       = [];
 let arcActive  = false;
 let arcTick    = 0;
+let curHueBase = 190;
 
 function spawnArcs() {
-  // Spawn 2–4 arc dari titik tepi acak ke titik lain
   const count = 2 + Math.floor(Math.random() * 3);
   for (let i = 0; i < count; i++) {
     const side = Math.floor(Math.random() * 4);
@@ -213,44 +221,39 @@ function spawnArcs() {
     else if (side === 2) { x0 = 0;  y0 = Math.random() * H; }
     else                 { x0 = W;  y0 = Math.random() * H; }
 
-    // Tujuan: tepi sisi berlawanan, sedikit ke tengah
     const x1 = x0 + (W/2 - x0) * (0.15 + Math.random() * 0.25);
     const y1 = y0 + (H/2 - y0) * (0.15 + Math.random() * 0.25);
 
     arcs.push({ x0, y0, x1, y1, life: 1.0,
       segments: 8 + Math.floor(Math.random() * 8),
       jitter:   30 + Math.random() * 60,
-      hue:      185 + Math.random() * 35,
+      hue:      curHueBase + (Math.random() * 30 - 15),
     });
   }
 }
 
 let animId   = null;
 let fxActive = false;
-let phase    = 0;   // 0=muncul 1=sustain 2=fade
+let phase    = 0;
 let phaseT   = 0;
+let scanY    = -1;
 
 function fxLoop() {
   ctx.clearRect(0, 0, W, H);
   phaseT++;
 
-  // Edge glow
   const glowAlpha = phase < 2 ? Math.min(1, phaseT / 12) : Math.max(0, 1 - (phaseT - 30) / 20);
-  drawEdgeGlow(glowAlpha);
+  drawEdgeGlow(glowAlpha, curHueBase);
+  drawCorners(Math.min(1, glowAlpha * 1.5), curHueBase);
 
-  // Corner brackets
-  drawCorners(Math.min(1, glowAlpha * 1.5));
-
-  // Scan line — satu kali sweep saat phase 0
   if (phase === 0) {
     if (scanY < 0) scanY = 0;
     scanY += H / 35;
     if (scanY <= H) {
-      // Garis tipis bercahaya
       const sg = ctx.createLinearGradient(0, scanY - 3, 0, scanY + 3);
-      sg.addColorStop(0,   'rgba(0,234,255,0)');
-      sg.addColorStop(0.5, 'rgba(0,234,255,0.55)');
-      sg.addColorStop(1,   'rgba(0,234,255,0)');
+      sg.addColorStop(0,   `hsla(${curHueBase},100%,55%,0)`);
+      sg.addColorStop(0.5, `hsla(${curHueBase},100%,55%,0.55)`);
+      sg.addColorStop(1,   `hsla(${curHueBase},100%,55%,0)`);
       ctx.fillStyle = sg;
       ctx.fillRect(0, scanY - 3, W, 6);
     } else {
@@ -258,7 +261,6 @@ function fxLoop() {
     }
   }
 
-  // Arc — spawn tiap beberapa frame saat active
   if (fxActive && arcTick++ % 4 === 0) spawnArcs();
   for (const a of arcs) {
     const c = `hsla(${a.hue},100%,75%,${a.life * 0.85})`;
@@ -274,7 +276,8 @@ function fxLoop() {
   }
 }
 
-function startFx() {
+function startFx(hue) {
+  curHueBase = hue;
   fxActive = true;
   arcTick  = 0;
   phase    = 0;
@@ -290,17 +293,48 @@ function stopFx() {
   phaseT   = 0;
 }
 
+// ── Command profiles ──────────────────────────────────────────────────────────
+// Tiap command: warna aksen (CSS var), hue untuk FX canvas, dan teks readout.
+const COMMANDS = {
+  wink: {
+    hue: 190, accent: '#00eaff', glow: '#00aaff', accentDim: '#00eaff55',
+    label: 'EOG · AF7 / AF8', main: 'COMMAND A — WINK', sub: 'eog asimetri · kedip satu mata',
+  },
+  jaw_clench: {
+    hue: 14, accent: '#ff5e3a', glow: '#ff8a3a', accentDim: '#ff5e3a55',
+    label: 'EMG · TP9 / TP10', main: 'COMMAND B — JAW CLENCH', sub: 'broadband emg · rahang mengatup',
+  },
+  eyebrow_raise: {
+    hue: 110, accent: '#7cff6b', glow: '#9bff6b', accentDim: '#7cff6b55',
+    label: 'EMG · AF7 / AF8', main: 'COMMAND C — EYEBROW RAISE', sub: 'frontalis burst · alis terangkat',
+  },
+};
+
 // ── Overlay trigger ───────────────────────────────────────────────────────────
-const overlay = document.getElementById('overlay');
+const overlay    = document.getElementById('overlay');
+const root       = document.documentElement;
+const elLabel    = document.getElementById('text-label');
+const elMain     = document.getElementById('text-main');
+const elSub      = document.getElementById('text-sub');
 let hideTimer = null;
 let fadeTimer = null;
 
-function triggerOverlay() {
+function triggerOverlay(commandKey) {
+  const cmd = COMMANDS[commandKey];
+  if (!cmd) return;
+
+  root.style.setProperty('--accent',     cmd.accent);
+  root.style.setProperty('--accent-dim', cmd.accentDim);
+  root.style.setProperty('--glow',       cmd.glow);
+  elLabel.textContent = cmd.label;
+  elMain.textContent  = cmd.main;
+  elSub.textContent   = cmd.sub;
+
   clearTimeout(hideTimer);
   clearTimeout(fadeTimer);
   overlay.classList.remove('fadeout');
   overlay.classList.add('active');
-  startFx();
+  startFx(cmd.hue);
 
   hideTimer = setTimeout(() => {
     stopFx();
@@ -313,13 +347,25 @@ function triggerOverlay() {
 
 // ── Socket.IO ─────────────────────────────────────────────────────────────────
 const socket = io();
-socket.on('connect',       () => console.log('[overlay] connected'));
-socket.on('disconnect',    () => console.log('[overlay] disconnected'));
-socket.on('eyebrow_raise', () => { console.log('[overlay] fired'); triggerOverlay(); });
+socket.on('connect',            () => console.log('[playground] connected'));
+socket.on('disconnect',         () => console.log('[playground] disconnected'));
+socket.on('wink',               () => { console.log('[playground] wink fired');               triggerOverlay('wink'); });
+socket.on('jaw_clench',         () => { console.log('[playground] jaw_clench fired');         triggerOverlay('jaw_clench'); });
+socket.on('eyebrow_raise',      () => { console.log('[playground] eyebrow_raise fired');      triggerOverlay('eyebrow_raise'); });
 
-// Dev: Space / Enter untuk test tanpa Muse
+// Dev: Shift+1/2/3 untuk test tiap command tanpa Muse.
+// PENTING: cek modifier key & abaikan saat fokus di input/textarea — tanpa ini,
+// shortcut browser umum (mis. Cmd/Ctrl+1/2/3 ganti tab) ikut ter-trigger di
+// halaman ini, menyebabkan overlay muncul "sendiri" tanpa deteksi backend asli.
 document.addEventListener('keydown', e => {
-  if (e.key === ' ' || e.key === 'Enter') triggerOverlay();
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+  if (!e.shiftKey) return;
+
+  if (e.key === '1') triggerOverlay('wink');
+  if (e.key === '2') triggerOverlay('jaw_clench');
+  if (e.key === '3') triggerOverlay('eyebrow_raise');
 });
 </script>
 </body>

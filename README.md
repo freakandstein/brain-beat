@@ -14,7 +14,7 @@ Muse 2 (Bluetooth BLE)
     ↓  auto-reconnect with backoff (3s → 5s → 10s → 15s) on drop
 BrainFlow DataFilter — PSD Welch, band power θ/α/β
     ↓  2-pass EMG rejection (frontal + temporal)
-    ↓  Eyebrow raise detection — bilateral AF7+AF8 >350µV, symmetry <3.0, cooldown 3s
+    ↓  Mental Command detection (3 gestures — see below)
     ↓  Rolling normalization p10–p90 + EMA 0.20
 Mental State Classifier — arousal = 0.50β − 0.30α − 0.20TBR
     ↓  flow_score = frontal_α + frontal_θ − β  (AF7/AF8)
@@ -25,27 +25,28 @@ BrainBeat Drum Engine — FluidSynth GM ch9
     ↓  FLOW: groove mid-tempo (72–85 BPM)
     ↓  TENSE: battle drums (95–135 BPM)
 Flask-SocketIO (port 8765)
-    ↓  /          → Brain Beat Monitor overlay (OBS Browser Source)
-    ↓  /overlay   → Eyebrow raise FX overlay (second OBS Browser Source layer)
-    ↓  eyebrow_raise event → triggers full-screen electric arc visual FX
+    ↓  /                        → Brain Beat Monitor overlay (OBS Browser Source)
+    ↓  /overlay/mental-command  → Mental Command Playground (3-command demo overlay)
+    ↓  wink / jaw_clench / eyebrow_raise events → full-screen visual FX per command
 ```
 
 ---
 
 ## Features
 
-### Eyebrow Raise — Active Command
+### Mental Command Playground — 3 Active Commands
 
-A deliberate eyebrow raise triggers a full-screen visual FX overlay on a **separate page** (`/overlay`), suitable as a second OBS Browser Source layer above the game capture.
+Three distinct gestures trigger a full-screen visual FX overlay at `/overlay/mental-command`, each using different electrodes and signal modalities:
 
-**Detection logic:**
-- **Bilateral**: AF7 and AF8 both exceed 350µV peak-to-peak in the same window
-- **Symmetric**: the stronger side is less than 3× the weaker side (filters unilateral artifacts from jaw or temple)
-- **Cooldown**: 3 seconds between triggers to prevent repeated fires
+| Command | Gesture | Channel | Detection Logic |
+|---|---|---|---|
+| **A — Wink** | Kedip satu mata | AF7 / AF8 | One side >200µV, asymmetry ratio >4× (unilateral EOG deflection) |
+| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >600µV, sustained ≥2 consecutive ticks (~0.5s) |
+| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both >350µV, symmetric ratio <3.0 (bilateral frontal EMG) |
 
-Once detected: `brainflow_connector` → `music_server` (SocketIO `eyebrow_raise`) → `overlay.html` (electric arc FX for 2.8 seconds).
+**Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry* — which is why they can coexist without cross-triggering.
 
-To test without a Muse: open `http://localhost:8765/overlay` and press **Space** or **Enter**.
+To test without a Muse: open `/overlay/mental-command` and press **Shift+1**, **Shift+2**, **Shift+3**.
 
 ### Mental State Detection
 
@@ -148,10 +149,10 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 - **Waveform** — rolling θ/α/β canvas with spectral centroid Hz per band
 - **Reconnecting dot** — orange pulsing dot when auto-reconnect is in progress
 
-**Eyebrow Raise FX Overlay** (`http://localhost:8765/overlay`):
-- Transparent page, add as a second OBS Browser Source above the game capture
-- Displays electric arc particles, scan-line sweep, edge glow, and center text on trigger
-- Auto-hides after 2.8 seconds with fade-out
+**Mental Command Playground** (`http://localhost:8765/overlay/mental-command`):
+- Full-screen command demo overlay with 3 distinct color schemes per command
+- Command A (Wink) — cyan, Command B (Jaw Clench) — orange, Command C (Eyebrow Raise) — green
+- Dev test: **Shift+1 / Shift+2 / Shift+3** to trigger each command without Muse
 
 ---
 
@@ -217,5 +218,8 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | BrainBeat drum engine (FluidSynth) | ✅ |
 | OBS overlay UI (index.html) | ✅ |
 | Eyebrow raise detection + overlay FX | ✅ |
+| Mental Command Playground (3 commands) | ✅ |
+| Wink detection (unilateral EOG asymmetry) | ✅ |
+| Jaw clench detection (temporal EMG sustained) | ✅ |
 | Auto-reconnect with backoff | ✅ |
 | ML classifier (SVM/LDA) | 🔲 planned |

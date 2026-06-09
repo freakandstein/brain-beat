@@ -9,14 +9,14 @@ Drum patterns change automatically based on mental state: calm (brush jazz) or t
 Muse 2 (via muselsl + pylsl) / Simulator
         │
         ▼
-  brainflow_connector.py  ← EEG acquisition, EMG rejection, eyebrow raise detection
+  brainflow_connector.py       ← EEG acquisition, EMG rejection, mental command detection
         │
-  music_engine.py         ← BrainBeat core: FluidSynth drums-only (GM channel 9)
+  music_engine.py              ← BrainBeat core: FluidSynth drums-only (GM channel 9)
         │
-  music_server.py         ← Flask + SocketIO bridge (port 8765)
+  music_server.py              ← Flask + SocketIO bridge (port 8765)
         │
-  templates/index.html    ← Web UI "BRAIN BEAT MONITOR" (OBS overlay)
-  templates/overlay.html  ← Eyebrow raise overlay FX (http://localhost:8765/overlay)
+  templates/index.html         ← Web UI "BRAIN BEAT MONITOR" (OBS overlay)
+  templates/overlay_mental_command.html ← 3-command mental command overlay (/overlay/mental-command)
 ```
 
 ## EEG Bands
@@ -73,37 +73,63 @@ python3 music_server.py
 
 Open browser: **http://localhost:8765**
 
-## Eyebrow Raise Detection
+## Mental Command Detection
 
-Frontal EMG from AF7/AF8 is used to detect deliberate eyebrow raises as an **active command**.
+Three active commands are detected in real-time, each using distinct signal dimensions to avoid cross-triggering.
 
-### Detection Logic
+### Command A — Wink (`on_wink`)
 
 ```
-Condition  : AF7 p2p > 350µV AND AF8 p2p > 350µV   (bilateral — both frontal channels)
-Symmetry   : max(p2p_AF7, p2p_AF8) / min(p2p_AF7, p2p_AF8) < 3.0
-             (genuine raise = both sides proportional; artifact = one side dominates)
-Cooldown   : 3 seconds between triggers
+Channel    : AF7 (ch1) and AF8 (ch2)
+Condition  : max(p2p_AF7, p2p_AF8) > 200µV          (one side has significant deflection)
+Asymmetry  : max / min ratio > 4.0                   (one side dominates — unilateral)
+Guard      : NOT bilateral                            (not an eyebrow raise)
+Cooldown   : 1.5 seconds
 ```
 
-A unilateral artifact (jaw, temple, one eyebrow) will fail the symmetry check. A genuine bilateral raise passes both thresholds and fires `on_eyebrow_raise()`.
+Wink left → AF7 dominates. Wink right → AF8 dominates. The 4× asymmetry requirement ensures a genuine unilateral eye closure, not bilateral noise or an eyebrow raise.
 
-### What Happens on Trigger
+### Command B — Jaw Clench (`on_jaw_clench`)
 
-1. `brainflow_connector.py` fires `on_eyebrow_raise` callback
-2. `music_server.py` emits `eyebrow_raise` via SocketIO
-3. `templates/overlay.html` receives the event and plays the visual FX
+```
+Channel    : TP9 (ch0) and TP10 (ch3)
+Filter     : 20–100 Hz bandpass (broadband EMG range)
+Condition  : p2p > 600µV on either channel
+Sustained  : ≥ 2 consecutive ticks (~0.5s) above threshold
+Guard      : NOT bilateral frontal (prevents eyebrow EMG bleed-over to temporal)
+Cooldown   : 2.5 seconds
+```
 
-### Overlay FX (`/overlay`)
+Jaw muscle EMG is strong and sustained. Threshold of 600µV set high to handle session-to-session noise floor variance.
 
-A separate transparent page at `http://localhost:8765/overlay`, designed as an OBS Browser Source layer on top of the game feed:
+### Command C — Eyebrow Raise (`on_eyebrow_raise`)
 
-- Full-screen electric arc particles + edge glow + scan line sweep
-- Center text: `BRAIN SIGNAL RECEIVED` with cyan neon glow
-- Auto-hides after **2.8 seconds** with 1.4s fade-out
-- Dev test: press **Space** or **Enter** to trigger without Muse
+```
+Channel    : AF7 (ch1) and AF8 (ch2)
+Condition  : AF7 p2p > 350µV AND AF8 p2p > 350µV    (bilateral — both sides active)
+Symmetry   : max / min ratio < 3.0                   (both sides proportional)
+Cooldown   : 3 seconds
+```
 
-Add as a second OBS Browser Source (same dimensions as game capture, above it in layer order).
+A genuine bilateral raise passes both thresholds. Unilateral artifacts (wink, jaw bleed) fail the bilateral+symmetry check.
+
+### Design Principle
+
+All three commands use fundamentally different signal dimensions:
+- **Wink** → left-right *asymmetry* on frontal channels
+- **Jaw clench** → dedicated *temporal* channels, sustained
+- **Eyebrow raise** → bilateral *symmetry* on frontal channels
+
+This orthogonality is why they coexist without cross-triggering.
+
+### Overlay FX
+
+**`/overlay/mental-command`** — 3-command overlay. Each command has its own color:
+- Command A (Wink): cyan
+- Command B (Jaw Clench): orange  
+- Command C (Eyebrow Raise): green
+
+Dev test: **Shift+1 / Shift+2 / Shift+3**. Auto-hides after 2.8 seconds.
 
 ## Web UI
 
