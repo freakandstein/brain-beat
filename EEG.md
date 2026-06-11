@@ -6,7 +6,7 @@
 |---|---|---|
 | **music_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, 3-state calm/flow/tense, adaptive threshold (60s warm-up), tense_level build-up, flow_score dari frontal EEG |
 | **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR + eyebrow_raise event |
-| **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar, SIGNAL, CONS, warming-up indicator, EEG channel map, waveform Hz display, status reconnecting |
+| **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAIN BEAT MONITOR" — single card: state badge, HR, mental command trigger (Scene N by brain signal), spectrum slider, EEG waveforms θ/α/β + Hz display, EEG channel map SVG, status reconnecting |
 | **Overlay FX (overlay_mental_command.html)** | ✅ Selesai | Full-screen visual FX per command — electric arc, scan line, edge glow, auto-hide 2.8s, 3 warna berbeda |
 | **Mental Command Playground** | ✅ Selesai | 3 active commands via `/overlay/mental-command` — wink, jaw clench, eyebrow raise, masing-masing warna berbeda |
 | **State detection** | ✅ Selesai | 3-state calm/flow/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
@@ -155,10 +155,11 @@ WebSocket Server              ← [✅ Impl.] Flask-SocketIO, port 8765
     ↓                                      warming_up, eeg_active
     ↓                                      θ/α/β raw µV², θ/α/β Hz centroid, HR, muse status
     ↓                                      event: eyebrow_raise (SocketIO emit)
-HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAIN BEAT MONITOR" — BPM, HR, BUILD bar,
-(templates/index.html)                     SIGNAL (confidence), CONS (consistency),
-    ↓                                      warming-up indicator, EEG channel map SVG,
-    ↓                                      waveform canvas θ/α/β + Hz centroid per band
+HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAIN BEAT MONITOR" — single card layout:
+(templates/index.html)                     state badge (CALM/FLOW/TENSE) + HR + mental command trigger,
+    ↓                                      spectrum slider (spectrum_pos 0..1),
+    ↓                                      waveform canvas θ/α/β + Hz centroid per band,
+    ↓                                      EEG channel map SVG (TP9/AF7/AF8/TP10)
     ↓                                      status: connecting / reconnecting / connected / error
 Overlay FX                    ← [✅ Impl.] templates/overlay_mental_command.html — http://localhost:8765/overlay/mental-command
 (templates/overlay_mental_command.html)                   Triggered by wink / jaw_clench / eyebrow_raise events via SocketIO

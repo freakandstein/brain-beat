@@ -120,32 +120,29 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 `http://localhost:8765` — transparent background, ready to use as an OBS Browser Source.
 
 ```
-┌─────────────────────────────────────────────────┐
-│  ● BRAIN BEAT MONITOR    FluidSynth · Realtime  │
-├──────────────────┬──────────────────────────────┤
-│  CALM / TENSE    │  EEG CHANNEL MAP             │
-│                  │   ┌──────────────┐            │
-│  BPM  72         │   │  AF7    AF8  │            │
-│  HR   68         │   │              │            │
-│  BUILD ████░░    │   │ TP9    TP10  │            │
-│  SIGNAL ██████   │   └──────────────┘            │
-│  CONS   ████░░   │                               │
-├──────────────────┴──────────────────────────────┤
-│  θ theta  4–8Hz  ▓▓▒▒░░░░░░░░░░░░░░   4.2 µV²  │
-│  α alpha  8–13Hz ▓▓▓▓▒▒░░░░░░░░░░░░  12.1 µV²  │
-│  β beta  13–25Hz ▓▒░░░░░░░░░░░░░░░░   2.8 µV²  │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  ● BRAIN BEAT MONITOR    FluidSynth · Realtime      │
+├─────────────────────────────────────────────────────┤
+│  CALM                          ♥ 68 bpm             │
+│  Calm / Relaxed                Scene 1 by brain     │
+│                                signal  ← (2.5s)     │
+│  CALM ──⬡ FLOW ZONE──────── TENSE                   │
+│        ●                                            │
+│  relaxed    engaged calm    aroused                 │
+├──────────────────────┬──────────────────────────────┤
+│  EEG CHANNELS        │  EEG CHANNEL MAP             │
+│  θ theta  4–8Hz  ~~  │   ○ AF7    AF8 ○             │
+│  α alpha  8–13Hz ~~  │                              │
+│  β beta  13–25Hz ~~  │   ○ TP9   TP10 ○             │
+└──────────────────────┴──────────────────────────────┘
 ```
 
 **UI elements:**
-- **STATE** — CALM / TENSE with distinct colors
-- **BPM** — current drum tempo
-- **HR** — heart rate from Muse 2 PPG (updates every 5 seconds)
-- **BUILD** — tense momentum (0–100%), escalates into STRESS mode
-- **SIGNAL** — confidence: how far arousal is from the threshold
-- **CONS** — consistency: proportion of the vote buffer in agreement
-- **WARMING UP** — shown while the adaptive threshold is still calibrating
-- **EEG Channel Map** — SVG head diagram, electrode color = signal quality
+- **STATE** — CALM / FLOW / TENSE badge with color (green / yellow / purple)
+- **HR** — heart rate from Muse 2 PPG, top-right of state row
+- **Mental command trigger** — appears below HR for 2.5s when a brain signal fires: `Scene 1 by brain signal` (green). Hidden when idle.
+- **Spectrum slider** — cursor tracks `spectrum_pos` (0=calm → 1=tense) across gradient bar
+- **EEG Channel Map** — SVG head diagram, electrode color = signal quality (green/yellow/red/grey)
 - **Waveform** — rolling θ/α/β canvas with spectral centroid Hz per band
 - **Reconnecting dot** — orange pulsing dot when auto-reconnect is in progress
 

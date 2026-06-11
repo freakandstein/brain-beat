@@ -40,11 +40,16 @@ body {
     letter-spacing: 0.1em;
     color: var(--text);
 }
+.header-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 4px;
+}
 .header-sub {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-top: 4px;
     color: var(--dim);
     font-size: 0.78rem;
 }
@@ -56,6 +61,45 @@ body {
     transition: background 0.4s;
 }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+/* ── BCI connect button ──────────────────────────────── */
+.bci-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    flex-shrink: 0;
+}
+#bci-btn {
+    font-family: 'Courier New', monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--accent);
+    color: var(--dim);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+#bci-btn:hover { border-color: var(--text); color: var(--text); }
+#bci-btn.scanning { color: #fbbf24; border-color: #fbbf24; animation: blink 0.9s infinite; }
+#bci-btn.connecting { color: #fbbf24; border-color: #fbbf24; cursor: default; }
+#bci-btn.connected {
+    color: #4ade80;
+    border-color: #4ade80;
+    background: #1a2e20;
+    cursor: pointer;
+}
+#bci-btn.connected:hover { background: #243a2a; }
+.bci-device-list {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
 
 /* ── Divider ─────────────────────────────────────────── */
 .divider { height: 1px; background: var(--border); margin: 6px 0; }
@@ -81,8 +125,8 @@ body {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 6px;
     flex-shrink: 0;
+    position: relative;
 }
 .hr-badge {
     font-family: 'Courier New', monospace;
@@ -97,6 +141,8 @@ body {
     color: #4ade80;
     transition: color 0.5s, text-shadow 0.5s;
     text-shadow: 0 0 24px #4ade8080;
+    min-width: 6.5ch;
+    display: block;
 }
 #state-desc {
     color: var(--dim);
@@ -161,11 +207,14 @@ body {
 .mental-inline {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 5px;
     border-radius: 6px;
-    padding: 3px 5px 3px 3px;
+    padding: 2px 4px 2px 3px;
     transition: background 0.3s;
-    text-align: right;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    white-space: nowrap;
 }
 .mental-inline.flash {
     background: #4ade8010;
@@ -259,88 +308,23 @@ body {
     flex-shrink: 0;
 }
 
-/* ── Muse panel ──────────────────────────────────────── */
-.muse-panel {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 14px 18px;
-    margin: 8px 0;
-}
-.muse-status-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 10px;
-    font-size: 0.82rem;
-}
-.muse-dot {
-    width: 9px; height: 9px;
-    border-radius: 50%;
-    background: var(--dim);
-    flex-shrink: 0;
-    transition: background 0.3s;
-}
-.muse-dot.connected    { background: #4ade80; }
-.muse-dot.connecting   { background: #fbbf24; animation: blink 0.9s infinite; }
-.muse-dot.reconnecting { background: #fb923c; animation: blink 0.6s infinite; }
-.muse-dot.error        { background: #f87171; }
-.muse-input-row {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-#muse-btn, #muse-scan-btn {
-    border-radius: 7px;
-    font-size: 0.8rem;
-    font-weight: 700;
-    padding: 8px 16px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all 0.15s;
-    font-family: inherit;
-    border: 1px solid;
-}
-#muse-btn {
-    background: #1a2e20;
-    border-color: #4ade80;
-    color: #4ade80;
-    flex: 1;
-}
-#muse-btn:hover { background: #243a2a; }
-#muse-btn.disconnecting {
-    border-color: #f87171;
-    color: #f87171;
-    background: #2e1a1a;
-}
-#muse-scan-btn {
-    background: var(--accent);
-    border-color: var(--border);
-    color: var(--dim);
-}
-#muse-scan-btn:hover { border-color: var(--text); color: var(--text); }
-#muse-scan-btn:disabled { opacity: 0.4; cursor: default; }
-.muse-device-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-top: 8px;
-}
-.muse-device-item {
+.bci-device-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: var(--accent);
+    gap: 8px;
+    background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 7px 12px;
-    font-size: 0.8rem;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.72rem;
     cursor: pointer;
     transition: border-color 0.15s;
+    white-space: nowrap;
 }
-.muse-device-item:hover { border-color: #4ade80; }
-.muse-device-name { color: var(--text); font-weight: 600; }
-.muse-device-addr { color: var(--dim); font-family: monospace; font-size: 0.72rem; }
+.bci-device-item:hover { border-color: #4ade80; }
+.bci-device-name { color: var(--text); font-weight: 600; font-family: 'Courier New', monospace; }
+.bci-device-addr { color: var(--dim); font-family: monospace; font-size: 0.65rem; }
 </style>
 </head>
 
@@ -350,9 +334,15 @@ body {
   <!-- Header -->
   <div class="header">
     <h1>BRAIN BEAT MONITOR</h1>
-    <div class="header-sub">
-      <span class="live-dot" id="live-dot"></span>
-      FluidSynth &nbsp;·&nbsp; Generative &nbsp;·&nbsp; Realtime
+    <div class="header-bottom">
+      <div class="header-sub">
+        <span class="live-dot" id="live-dot"></span>
+        FluidSynth &nbsp;·&nbsp; Generative &nbsp;·&nbsp; Realtime
+      </div>
+      <div class="bci-wrap">
+        <button id="bci-btn" onclick="bciBtnClick()">&#x1F50D; Connect</button>
+        <div class="bci-device-list" id="bci-device-list"></div>
+      </div>
     </div>
   </div>
 
@@ -455,21 +445,6 @@ body {
 
   </div>
 
-  <div class="divider"></div>
-
-  <!-- Muse 2 Connection -->
-  <div class="section-label" style="margin-bottom:8px">BCI DEVICE</div>
-  <div class="muse-panel">
-    <div class="muse-status-row">
-      <span class="muse-dot" id="muse-dot"></span>
-      <span id="muse-status-text" style="color:var(--dim)">Not connected</span>
-    </div>
-    <div class="muse-input-row">
-      <button id="muse-btn" onclick="toggleMuse()" class="disconnecting" style="display:none">Disconnect</button>
-      <button id="muse-scan-btn" onclick="scanMuse()">&#x1F50D; Scan Devices</button>
-    </div>
-    <div class="muse-device-list" id="muse-device-list"></div>
-  </div>
 
 </div><!-- /container -->
 
@@ -517,7 +492,7 @@ socket.on('state_update', (d) => {
   if (d.beta_raw  != null) { waves.beta.push(Math.max(toDb(d.beta_raw),  0)); document.getElementById('beta-val').textContent  = fmtHz(d.beta_hz);  }
 
   if (d.muse === 'connected' && !museConnected && !museDisconnecting) {
-    setMuseUI('connected', '✅ Muse 2 connected');
+    setBciUI('connected');
   }
 
   updateHeadDiagram(d.channel_quality, d.muse === 'connected');
@@ -537,80 +512,74 @@ function updateHeadDiagram(quality, connected) {
 // ── Muse 2 ────────────────────────────────────────────────────────────────
 let museConnected     = false;
 let museDisconnecting = false;
+let _connectTimeout   = null;
 
-function toggleMuse() {
-  if (!museConnected) return;
-  museDisconnecting = true;
-  socket.emit('muse_disconnect');
-  setMuseUI('disconnected', 'Not connected');
+function bciBtnClick() {
+  if (museConnected) {
+    museDisconnecting = true;
+    socket.emit('muse_disconnect');
+    setBciUI('disconnected');
+  } else {
+    setBciUI('scanning');
+    document.getElementById('bci-device-list').innerHTML = '';
+    socket.emit('muse_scan');
+  }
 }
-
-function scanMuse() {
-  const scanBtn = document.getElementById('muse-scan-btn');
-  scanBtn.disabled = true;
-  scanBtn.textContent = 'Scanning...';
-  document.getElementById('muse-device-list').innerHTML =
-    '<div style="font-size:0.75rem;color:var(--dim);padding:4px 2px">Scanning for BLE devices... (~5 sec)</div>';
-  socket.emit('muse_scan');
-}
-
-let _connectTimeout = null;
 
 function connectDevice(name, address) {
   socket.emit('muse_connect', { address: address });
-  setMuseUI('connecting', 'Connecting to ' + name + '...');
-  document.getElementById('muse-device-list').innerHTML = '';
+  setBciUI('connecting', name);
+  document.getElementById('bci-device-list').innerHTML = '';
   clearTimeout(_connectTimeout);
   _connectTimeout = setTimeout(() => {
-    if (!museConnected) setMuseUI('error', '❌ Connection timeout — retry?');
+    if (!museConnected) setBciUI('error');
   }, 45000);
 }
 
-function setMuseUI(status, text) {
-  document.getElementById('muse-dot').className = 'muse-dot ' + status;
-  document.getElementById('muse-status-text').textContent = text;
+function setBciUI(status, name) {
+  const btn  = document.getElementById('bci-btn');
+  const list = document.getElementById('bci-device-list');
   museConnected = (status === 'connected');
-
-  const connectBtn = document.getElementById('muse-btn');
-  const scanBtn    = document.getElementById('muse-scan-btn');
+  btn.className = '';
 
   if (status === 'connected') {
-    connectBtn.style.display = '';
-    scanBtn.style.display    = 'none';
-  } else if (status === 'connecting' || status === 'reconnecting') {
-    connectBtn.style.display = 'none';
-    scanBtn.style.display    = '';
-    scanBtn.disabled         = true;
-    scanBtn.textContent      = status === 'reconnecting' ? '🔄 Reconnecting...' : '⏳ Connecting...';
+    btn.className   = 'connected';
+    btn.textContent = '● Connected';
+  } else if (status === 'scanning') {
+    btn.className   = 'scanning';
+    btn.textContent = 'Scanning...';
+  } else if (status === 'connecting') {
+    btn.className   = 'connecting';
+    btn.textContent = '⏳ ' + (name || 'Connecting...');
+  } else if (status === 'reconnecting') {
+    btn.className   = 'connecting';
+    btn.textContent = '🔄 Reconnecting...';
+  } else if (status === 'error') {
+    btn.textContent = '⚠ Retry';
   } else {
-    connectBtn.style.display = 'none';
-    scanBtn.style.display    = '';
-    scanBtn.disabled         = false;
-    scanBtn.textContent      = '🔍 Scan Devices';
-    if (status === 'disconnected') {
-      document.getElementById('muse-device-list').innerHTML = '';
-    }
+    btn.textContent = '🔍 Connect';
+    list.innerHTML  = '';
   }
 }
 
 socket.on('muse_scan_result', (d) => {
-  const scanBtn = document.getElementById('muse-scan-btn');
-  const list    = document.getElementById('muse-device-list');
   if (d.scanning) return;
-  scanBtn.disabled = false;
-  scanBtn.textContent = '🔍 Scan';
+  const list = document.getElementById('bci-device-list');
+  const btn  = document.getElementById('bci-btn');
+  btn.className   = '';
+  btn.textContent = '🔍 Connect';
   if (d.error) {
-    list.innerHTML = `<div style="font-size:0.75rem;color:#f87171;padding:4px 2px">${d.error}</div>`;
+    list.innerHTML = `<div style="font-size:0.68rem;color:#f87171;text-align:right">${d.error}</div>`;
     return;
   }
   if (!d.devices || d.devices.length === 0) {
-    list.innerHTML = '<div style="font-size:0.75rem;color:var(--dim);padding:4px 2px">No Muse devices found. Make sure Muse is powered on.</div>';
+    list.innerHTML = '<div style="font-size:0.68rem;color:var(--dim);text-align:right">No devices found</div>';
     return;
   }
   list.innerHTML = d.devices.map(dev =>
-    `<div class="muse-device-item" onclick="connectDevice('${dev.name}','${dev.address}')">
-       <span class="muse-device-name">${dev.name}</span>
-       <span class="muse-device-addr">${dev.address}</span>
+    `<div class="bci-device-item" onclick="connectDevice('${dev.name}','${dev.address}')">
+       <span class="bci-device-name">${dev.name}</span>
+       <span class="bci-device-addr">${dev.address}</span>
      </div>`
   ).join('');
 });
@@ -652,15 +621,7 @@ socket.on('muse_status', (d) => {
   if (d.status === 'disconnected' || d.status === 'error' || d.status === 'reconnecting') {
     museDisconnecting = false;
   }
-  const msgs = {
-    connected:    '✅ Muse 2 connected',
-    connecting:   'Connecting...',
-    reconnecting: '🔄 Reconnecting...',
-    disconnected: 'Not connected',
-    error:        '❌ ' + (d.error || 'Connection failed'),
-    unavailable:  'brainflow not installed',
-  };
-  setMuseUI(d.status, msgs[d.status] || d.status);
+  setBciUI(d.status);
 });
 
 // ── Waveform ───────────────────────────────────────────────────────────────

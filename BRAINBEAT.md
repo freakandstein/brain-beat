@@ -140,32 +140,26 @@ Dev test: **Shift+1 / Shift+2 / Shift+3**. Auto-hides after 2.8 seconds.
 
 ## Web UI
 
-The browser UI (`templates/index.html`) displays:
+The browser UI (`templates/index.html`) is a single consolidated card layout.
 
-**State Card (left)**
-- Active state (CALM / TENSE) with distinct colors
-- BPM, HR (heart rate from PPG), and BUILD level
-- BUILD progress bar (tense momentum) and TENSION level
-- WARMING UP indicator while adaptive threshold is still calibrating (first 60 seconds)
+**Main Card** — one container with all EEG info:
 
-**EEG Channel Map (right, inside state card)**
-- SVG head diagram with 4 electrodes (TP9, AF7, AF8, TP10)
-- Electrode color = signal quality: green / yellow / red / grey
-- Label: **EEG CHANNEL MAP**
+- **State row (top):** Active state badge (CALM / FLOW / TENSE) with color + description on the left; HR (heart rate from PPG) and mental command trigger on the right
+- **Mental command trigger:** appears below HR for 2.5 seconds when a brain signal fires — e.g. `Scene 1 by brain signal` (green). Hidden when idle.
+- **Spectrum slider:** CALM ↔ FLOW ZONE ↔ TENSE gradient with cursor tracking `spectrum_pos`
+- **EEG Channels + Channel Map (side by side):**
+  - Left: 3 rolling waveform canvases θ → α → β, colors: theta=green, alpha=blue, beta=purple; Hz centroid label per band
+  - Right: SVG head diagram (TP9, AF7, AF8, TP10), electrode color = signal quality: green/yellow/red/grey
 
-**EEG Channels (canvas waveforms)**
-- 3 rolling waveform canvases: θ → α → β (delta removed)
-- Colors: theta=green, alpha=blue, beta=purple
-- Y-axis: auto-scale per band (µV², 0 to max with slow decay)
-- Right label: current value in µV² (e.g. `158 µV²` / `3.95 µV²`)
-- Band label includes Hz range: `α alpha 8–13 Hz`
-- Buffer: 120 points (~2 minutes of history)
-
-**BCI Device Panel**
+**BCI Device Panel** (below main card)
 - Muse 2 connection status, scan + connect/disconnect buttons
-- Socket live-dot (header left): grey=connecting, green=connected, orange=reconnecting, red=disconnected
-- Auto-reconnect: if connection drops, connector retries automatically with backoff (3s → 5s → 10s → 15s)
-- UI shows `🔄 Reconnecting...` and orange dot during reconnect attempts
+- Socket live-dot (header): grey=idle, green=connected, red=disconnected
+- Auto-reconnect with backoff (3s → 5s → 10s → 15s); UI shows `🔄 Reconnecting...` during retries
+
+**Mental Commands** (socket events → UI trigger):
+- `wink` → Scene 1 by brain signal
+- `jaw_clench` → Scene 2 by brain signal
+- `eyebrow_raise` → Scene 3 by brain signal
 
 Compatible with **OBS Browser Source** (stream overlay).
 
