@@ -161,11 +161,12 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 | Signal Processing | BrainFlow DataFilter | PSD Welch, band power computation |
 | Audio Engine | FluidSynth + pyfluidsynth | Drum rendering via GM Soundfont |
 | Web Server | Flask + Flask-SocketIO | WebSocket bridge Python → Browser |
+| OBS Integration | obsws-python | WebSocket v5 scene switching |
 | Overlay UI | HTML/CSS/JS | OBS Browser Source |
 
 **Install dependencies:**
 ```bash
-pip install muselsl pylsl brainflow pyfluidsynth flask flask-socketio numpy
+pip install muselsl pylsl brainflow pyfluidsynth flask flask-socketio numpy obsws-python
 brew install fluid-synth   # macOS
 ```
 
@@ -175,7 +176,7 @@ brew install fluid-synth   # macOS
 
 ```bash
 # Use Terminal.app (not VS Code terminal — the process gets killed on idle)
-python3 music_server.py
+python3 eeg_server.py
 ```
 
 Open browser: `http://localhost:8765`
@@ -218,5 +219,6 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | Mental Command Playground (3 commands) | ✅ |
 | Wink detection (unilateral EOG asymmetry) | ✅ |
 | Jaw clench detection (temporal EMG sustained) | ✅ |
+| OBS scene switching via mental commands | ✅ |
 | Auto-reconnect with backoff | ✅ |
 | ML classifier (SVM/LDA) | 🔲 planned |
