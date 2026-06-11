@@ -1,10 +1,10 @@
 """
-BrainBeat — Web Server
-=======================
-Flask + SocketIO bridge antara BrainBeat engine dan browser UI.
+EEG Server
+==========
+Flask + SocketIO bridge antara EEG engine dan browser UI.
 
 Penggunaan:
-    python music_server.py
+    python eeg_server.py
     Buka: http://localhost:8765
 """
 
@@ -16,6 +16,10 @@ import subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 PORT = 8765
+
+from obs_connector import OBSConnector
+
+obs_connector = OBSConnector(password="OmU3IAuGtlNcUPUY")
 
 
 def _kill_existing():
@@ -35,7 +39,7 @@ def _kill_existing():
     except Exception:
         pass
 
-from music_engine import MusicEngine, find_or_download_soundfont
+from eeg_engine import MusicEngine, find_or_download_soundfont
 from flask import Flask, render_template
 from flask_socketio import SocketIO
 
@@ -194,6 +198,7 @@ def main():
     _kill_existing()
 
     print("🥁  BrainBeat — Web UI")
+    obs_connector.connect()
     print("    Mencari soundfont...")
     sf_path = find_or_download_soundfont()
 
@@ -214,14 +219,17 @@ def main():
         def _eyebrow_cb():
             print("⚡  Eyebrow raise detected — triggering overlay")
             socketio.emit("eyebrow_raise", {})
+            obs_connector.switch_scene("eyebrow_raise")
 
         def _wink_cb():
             print("😉  Wink detected — triggering overlay")
             socketio.emit("wink", {})
+            obs_connector.switch_scene("wink")
 
         def _jaw_clench_cb():
             print("🦷  Jaw clench detected — triggering overlay")
             socketio.emit("jaw_clench", {})
+            obs_connector.switch_scene("jaw_clench")
 
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         muse.on_eyebrow_raise = _eyebrow_cb

@@ -11,9 +11,11 @@ Muse 2 (via muselsl + pylsl) / Simulator
         ▼
   brainflow_connector.py       ← EEG acquisition, EMG rejection, mental command detection
         │
-  music_engine.py              ← BrainBeat core: FluidSynth drums-only (GM channel 9)
+  eeg_engine.py                ← BrainBeat core: FluidSynth drums-only (GM channel 9)
         │
-  music_server.py              ← Flask + SocketIO bridge (port 8765)
+  eeg_server.py                ← Flask + SocketIO bridge (port 8765)
+        │                ↘
+        │           obs_connector.py  ← OBS WebSocket v5 scene switching
         │
   templates/index.html         ← Web UI "BRAIN BEAT MONITOR" (OBS overlay)
   templates/overlay_mental_command.html ← 3-command mental command overlay (/overlay/mental-command)
@@ -42,7 +44,7 @@ brew install fluid-synth   # macOS
 
 ### 2. Install Python dependencies
 ```bash
-pip3 install pyfluidsynth numpy flask flask-socketio
+pip3 install pyfluidsynth numpy flask flask-socketio obsws-python
 ```
 
 ### 3. Soundfont
@@ -68,7 +70,7 @@ Save to `~/soundfonts/GeneralUser.sf2`.
 **Use Terminal.app** (not VS Code terminal — the process gets killed on idle):
 
 ```bash
-python3 music_server.py
+python3 eeg_server.py
 ```
 
 Open browser: **http://localhost:8765**
@@ -137,6 +139,25 @@ This orthogonality plus the global mutex is why they coexist without cross-trigg
 - Command C (Eyebrow Raise): green
 
 Dev test: **Shift+1 / Shift+2 / Shift+3**. Auto-hides after 2.8 seconds.
+
+## OBS Scene Switching
+
+Mental commands trigger OBS scene changes via WebSocket v5 (`obs_connector.py`).
+
+| Command | Default Scene |
+|---|---|
+| Wink | Scene 1 (2 Views Without Top) |
+| Jaw Clench | Scene 2 (3 Views) |
+| Eyebrow Raise | Scene 3 (2 Views Without Front) |
+
+Scene names can be changed in `obs_connector.py` → `DEFAULT_SCENE_MAP`.
+
+**Setup:**
+1. OBS → Tools → WebSocket Server Settings → Enable
+2. Set password in `eeg_server.py`: `OBSConnector(password="...")`
+3. Make sure scene names in `DEFAULT_SCENE_MAP` match exactly what's in OBS
+
+Connection is established at startup and auto-reconnects if OBS restarts.
 
 ## Web UI
 
