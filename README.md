@@ -25,7 +25,7 @@ BrainBeat Drum Engine — FluidSynth GM ch9
     ↓  FLOW: groove mid-tempo (72–85 BPM)
     ↓  TENSE: battle drums (95–135 BPM)
 Flask-SocketIO (port 8765)
-    ↓  /                        → Brain Beat Monitor overlay (OBS Browser Source)
+    ↓  /                        → BrainWave Monitor overlay (OBS Browser Source)
     ↓  /overlay/mental-command  → Mental Command Playground (3-command demo overlay)
     ↓  wink / jaw_clench / eyebrow_raise events → full-screen visual FX per command
 ```
@@ -121,7 +121,7 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  ● BRAIN BEAT MONITOR    FluidSynth · Realtime      │
+│  ● BRAINWAVE MONITOR    FluidSynth · Realtime      │
 ├─────────────────────────────────────────────────────┤
 │  CALM                          ♥ 68 bpm             │
 │  Calm / Relaxed                Scene 1 by brain     │

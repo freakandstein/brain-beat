@@ -17,7 +17,7 @@ Muse 2 (via muselsl + pylsl) / Simulator
         │                ↘
         │           obs_connector.py  ← OBS WebSocket v5 scene switching
         │
-  templates/index.html         ← Web UI "BRAIN BEAT MONITOR" (OBS overlay)
+  templates/index.html         ← Web UI "BRAINWAVE MONITOR" (OBS overlay)
   templates/overlay_mental_command.html ← 3-command mental command overlay (/overlay/mental-command)
 ```
 
