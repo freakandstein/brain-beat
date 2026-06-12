@@ -128,6 +128,11 @@ class MuseConnector:
         self.on_eyes_closed_relax: Optional[callable] = None
         self.on_double_blink: Optional[callable] = None   # deprecated
         self.on_teeth_tap: Optional[callable] = None      # deprecated
+        self._eyebrow_invalid_ticks: int = 0
+        # Buffer riwayat p2p per channel (6 tick terakhir ~900ms) untuk
+        # membedakan wink (transient spike) vs eyebrow raise (plateau sustained)
+        self._p2p_hist: dict = {1: [], 2: []}
+        self._P2P_HIST_LEN: int = 6
         self._wink_cooldown: float = 0.0
         self._jaw_cooldown: float = 0.0
         self._jaw_strong_streak: int = 0    # tick berturut-turut p2p EMG di atas threshold
@@ -167,9 +172,11 @@ class MuseConnector:
         self._history    = {"alpha": [], "beta": [], "theta": [], "tbr": [],
                             "frontal_alpha": [], "frontal_theta": []}
         self.heart_rate  = None
-        self._eyebrow_cooldown = 0.0
-        self._eyebrow_streak   = 0
-        self._wink_cooldown    = 0.0
+        self._eyebrow_cooldown      = 0.0
+        self._eyebrow_streak        = 0
+        self._eyebrow_invalid_ticks = 0
+        self._p2p_hist              = {1: [], 2: []}
+        self._wink_cooldown         = 0.0
         self._jaw_cooldown     = 0.0
         self._jaw_strong_streak = 0
         self._last_cmd_time    = 0.0
@@ -362,7 +369,7 @@ class MuseConnector:
         }
 
         while self.running:
-            time.sleep(0.25)  # 4 Hz — lag max 250 ms sebelum EEG sampai ke engine
+            time.sleep(0.15)  # ~6.7 Hz — lag max 150 ms sebelum EEG sampai ke engine
             self._loop_tick += 1
             for _k in _cmd_diag:
                 _cmd_diag[_k] = ""
@@ -439,10 +446,12 @@ class MuseConnector:
                 # eyebrow raise bilateral detection.
                 _frontal_emg = False
                 _ch_emg = {1: False, 2: False}
-                _ch_p2p = {1: 0.0,   2: 0.0}
+                _ch_p2p = {1: 0.0, 2: 0.0}
+                _ch_valid = {1: False, 2: False}
                 for ch in (1, 2):  # AF7=1, AF8=2
                     if ch_quality[ch] < 0.25:
                         continue
+                    _ch_valid[ch] = True
                     _fd = eeg_win[ch].copy()
                     DataFilter.detrend(_fd, DetrendOperations.CONSTANT.value)
                     DataFilter.perform_bandpass(
@@ -461,6 +470,47 @@ class MuseConnector:
                         _frontal_emg = True
                         _ch_emg[ch]  = True
 
+                # ── Update p2p history (hanya kalau channel valid) ────────────
+                for _ch in (1, 2):
+                    if _ch_valid[_ch]:
+                        self._p2p_hist[_ch].append(_ch_p2p[_ch])
+                        if len(self._p2p_hist[_ch]) > self._P2P_HIST_LEN:
+                            self._p2p_hist[_ch].pop(0)
+
+                # ── Hitung plateau score & transient score ────────────────────
+                # Plateau score: std rendah dari 4 tick terakhir saat nilai tinggi
+                # → eyebrow raise ditahan = nilai stabil / tidak naik-turun tajam
+                # Transient score: p2p tick sekarang vs max history
+                # → wink = spike 1-2 tick lalu langsung turun
+                def _plateau_score(hist, threshold=200.0):
+                    """Seberapa stabil nilai tinggi di 4 tick terakhir (0=transient, 1=plateau)."""
+                    if len(hist) < 4:
+                        return 0.0
+                    recent = hist[-4:]
+                    if max(recent) < threshold:
+                        return 0.0
+                    cv = np.std(recent) / (np.mean(recent) + 1e-6)  # coefficient of variation
+                    return float(np.clip(1.0 - cv, 0.0, 1.0))
+
+                def _transient_score(hist):
+                    """Apakah nilai sekarang sudah turun dari puncaknya (0=plateau, 1=transient)."""
+                    if len(hist) < 3:
+                        return 0.0
+                    peak = max(hist[:-1])  # puncak sebelum tick ini
+                    current = hist[-1]
+                    if peak < 200.0:
+                        return 0.0
+                    drop_ratio = 1.0 - (current / (peak + 1e-6))
+                    return float(np.clip(drop_ratio, 0.0, 1.0))
+
+                _plateau_af7 = _plateau_score(self._p2p_hist[1])
+                _plateau_af8 = _plateau_score(self._p2p_hist[2])
+                _plateau_bilateral = (_plateau_af7 + _plateau_af8) / 2.0
+
+                _transient_af7 = _transient_score(self._p2p_hist[1])
+                _transient_af8 = _transient_score(self._p2p_hist[2])
+                _transient_max = max(_transient_af7, _transient_af8)
+
                 # ── Eyebrow raise detection ────────────────────────────────────
                 # Syarat:
                 #   1. Bilateral: AF7 DAN AF8 keduanya >350µV
@@ -473,23 +523,36 @@ class MuseConnector:
                 # Dihitung sekali di sini, sebelum semua detector — supaya kalau
                 # eyebrow fire dan update _last_cmd_time di tick ini, wink/jaw
                 # di bawah langsung melihat _cmd_idle = False di tick yang sama.
-                _cmd_idle = (_now - self._last_cmd_time) > 3.5
+                _cmd_idle = (_now - self._last_cmd_time) > 5.0
                 _p2p_af7 = _ch_p2p[1]
                 _p2p_af8 = _ch_p2p[2]
                 _both_strong = _p2p_af7 > 350.0 and _p2p_af8 > 350.0
                 _symmetric   = (max(_p2p_af7, _p2p_af8) / (min(_p2p_af7, _p2p_af8) + 1e-6)) < 3.0
                 _bilateral   = _both_strong and _symmetric
 
-                self._eyebrow_streak = self._eyebrow_streak + 1 if _bilateral else 0
+                _both_ch_valid = _ch_valid[1] and _ch_valid[2]
+                if _both_ch_valid:
+                    # Kedua channel valid — update streak normal
+                    self._eyebrow_streak = self._eyebrow_streak + 1 if _bilateral else 0
+                    self._eyebrow_invalid_ticks = 0
+                else:
+                    # Salah satu channel drop — toleransi max 1 tick (freeze streak)
+                    # Lebih dari 1 tick invalid berturut-turut → reset
+                    self._eyebrow_invalid_ticks = getattr(self, '_eyebrow_invalid_ticks', 0) + 1
+                    if self._eyebrow_invalid_ticks > 1:
+                        self._eyebrow_streak = 0
 
-                if _frontal_emg:
+                if max(_p2p_af7, _p2p_af8) > 100.0:
                     _cd_left = max(0.0, 3.0 - (_now - self._eyebrow_cooldown))
                     print(
-                        f"  [EMG] AF7 p2p={_ch_p2p[1]}µV | AF8 p2p={_ch_p2p[2]}µV | "
-                        f"bilateral={_bilateral} streak={self._eyebrow_streak} cooldown={_cd_left:.1f}s"
+                        f"  [EYEBROW] AF7={_p2p_af7:.0f}µV AF8={_p2p_af8:.0f}µV "
+                        f"both_strong={_both_strong} symmetric={_symmetric} bilateral={_bilateral} "
+                        f"streak={self._eyebrow_streak} plateau={_plateau_bilateral:.2f} "
+                        f"cooldown={_cd_left:.1f}s"
                     )
 
-                if (self._eyebrow_streak >= 2 and
+                if (self._eyebrow_streak >= 3 and
+                        _plateau_bilateral >= 0.4 and
                         _cmd_idle and
                         self.on_eyebrow_raise and
                         _now - self._eyebrow_cooldown > 3.0):
@@ -529,10 +592,15 @@ class MuseConnector:
                 _cmd_diag["wink_af8"]   = round(_ch_p2p[2], 1)
                 _cmd_diag["wink_ratio"] = round(_wink_ratio, 2)
 
-                if (_wink_strong and _wink_asymm and not _both_strong and
+                if _wink_strong:
+                    print(f"  [WINK] AF7={_ch_p2p[1]:.0f}µV AF8={_ch_p2p[2]:.0f}µV ratio={_wink_ratio:.1f} asymm={_wink_asymm} bilateral={_bilateral} transient={_transient_max:.2f}")
+
+                if (_wink_strong and _wink_asymm and not _bilateral and
+                        _transient_max >= 0.15 and
+                        _both_ch_valid and
                         _cmd_idle and
                         self.on_wink and
-                        _now - self._wink_cooldown > 1.5):
+                        _now - self._wink_cooldown > 3.0):
                     self._wink_cooldown = _now
                     self._last_cmd_time  = _now
                     _cmd_diag["cmd_fired"] = "wink"
@@ -810,7 +878,7 @@ class MuseConnector:
                 }
 
                 # ── HR from PPG every 5 s ─────────────────────────────────
-                if ppg_inlet and self._loop_tick % 20 == 0 and ppg_total >= PPG_SR * 4:  # every 5 s at 4 Hz
+                if ppg_inlet and self._loop_tick % 33 == 0 and ppg_total >= PPG_SR * 4:  # every 5 s at ~6.7 Hz
                     n_p  = min(ppg_total, PPG_MAX)
                     sp   = (ppg_ptr - n_p) % PPG_MAX
                     if sp + n_p <= PPG_MAX:
@@ -821,8 +889,8 @@ class MuseConnector:
                     if hr is not None:
                         self.heart_rate = hr
 
-                # ── Terminal log + CSV — 1 Hz (setiap 4 tick di 4 Hz) ────────────────
-                if self._loop_tick % 4 == 0:
+                # ── Terminal log + CSV — 1 Hz (setiap 7 tick di ~6.7 Hz) ────────────────
+                if self._loop_tick % 7 == 0:
                     if ema_b < 0.20:
                         state_hint = "calm"
                     else:
