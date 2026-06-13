@@ -1,5 +1,5 @@
 """
-BrainBeat — Drums Only
+Brainwave Monitor — Drums Only
 =======================
 Menghasilkan pola drum via FluidSynth berdasarkan state EEG.
 
@@ -188,7 +188,7 @@ class EEGState:
         self.frontal_theta = max(0.0, min(1.0, self.frontal_theta))
 
 
-# ── BrainBeat engine ──────────────────────────────────────────────────────────
+# ── Brainwave Monitor engine ──────────────────────────────────────────────────────────
 
 class MusicEngine:
     def __init__(self, soundfont_path: str):
@@ -222,7 +222,7 @@ class MusicEngine:
         # Reverb hangat untuk drums
         self.fs.set_reverb(roomsize=0.5, damping=0.6, width=0.7, level=0.4)
         self.fs.set_chorus(0, 0.0, 0.3, 0.5, 0)
-        print("✅  BrainBeat siap.")
+        print("✅  Brainwave Monitor siap.")
 
     # ── public API ──────────────────────────────────────────────────────────
 
@@ -288,7 +288,7 @@ class MusicEngine:
         self._running = True
         self._thread  = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        print("▶  BrainBeat mulai...")
+        print("▶  Brainwave Monitor mulai...")
 
     def stop(self):
         self._running = False
@@ -298,7 +298,7 @@ class MusicEngine:
             self.fs.system_reset()   # matikan semua suara aktif di FluidSynth
         except Exception:
             pass
-        print("■  BrainBeat berhenti.")
+        print("■  Brainwave Monitor berhenti.")
 
     # ── main loop ───────────────────────────────────────────────────────────
 

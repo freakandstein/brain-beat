@@ -1,4 +1,4 @@
-# BrainBeat
+# Brainwave Monitor
 
 > Real-time EEG mental state monitor with a generative drum engine for live game streaming.
 
@@ -20,7 +20,7 @@ Mental State Classifier — arousal = 0.50β − 0.30α − 0.20TBR
     ↓  flow_score = frontal_α + frontal_θ − β  (AF7/AF8)
     ↓  spectrum_pos 0..1 → calm / flow / tense zones
     ↓  Adaptive threshold (60s warm-up) + 20-tick vote buffer (70% supermajority)
-BrainBeat Drum Engine — FluidSynth GM ch9
+Brainwave Monitor — FluidSynth GM ch9
     ↓  CALM: brush jazz (55–65 BPM)
     ↓  FLOW: groove mid-tempo (72–85 BPM)
     ↓  TENSE: battle drums (95–135 BPM)
@@ -213,7 +213,7 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | Band power θ/α/β + EMG rejection | ✅ |
 | Adaptive threshold + vote buffer | ✅ |
 | Heart rate via PPG | ✅ |
-| BrainBeat drum engine (FluidSynth) | ✅ |
+| Brainwave Monitor drum engine (FluidSynth) | ✅ |
 | OBS overlay UI (index.html) | ✅ |
 | Eyebrow raise detection + overlay FX | ✅ |
 | Mental Command Playground (3 commands) | ✅ |

@@ -197,7 +197,7 @@ def main():
 
     _kill_existing()
 
-    print("🥁  BrainBeat — Web UI")
+    print("🥁  Brainwave Monitor — Web UI")
     obs_connector.connect()
     print("    Mencari soundfont...")
     sf_path = find_or_download_soundfont()

@@ -116,26 +116,24 @@ class MuseConnector:
 
         # Eyebrow raise detection — callback dipanggil saat terdeteksi
         self.on_eyebrow_raise: Optional[callable] = None
-        self._eyebrow_cooldown: float = 0.0   # timestamp terakhir trigger
-        self._eyebrow_streak:   int   = 0     # tick bilateral berturut-turut (blink = 1 tick, eyebrow = 2+)
+        self._eyebrow_cooldown:     float = 0.0
+        self._eyebrow_streak:       int   = 0
+        self._eyebrow_active_until: float = 0.0  # zona blokir wink/jaw saat bilateral aktif
 
         # ── Mental command playground (3 modalitas campuran) ──────────────
-        # Wink (EOG asimetri AF7/AF8), Jaw clench (EMG sustained TP9/TP10),
-        # dan Eyebrow raise (EMG frontal bilateral AF7/AF8) — masing-masing
-        # punya callback + cooldown sendiri, dipanggil dari _loop.
+        # Tongue press (EMG 15-40Hz sedang TP9/TP10), Jaw clench (EMG broadband
+        # kuat TP9/TP10), dan Eyebrow raise (EMG frontal bilateral AF7/AF8).
+        # Tongue dan jaw pakai electrode yang sama tapi dibedakan amplitudo & band.
         self.on_wink: Optional[callable] = None
         self.on_jaw_clench: Optional[callable] = None
         self.on_eyes_closed_relax: Optional[callable] = None
         self.on_double_blink: Optional[callable] = None   # deprecated
         self.on_teeth_tap: Optional[callable] = None      # deprecated
         self._eyebrow_invalid_ticks: int = 0
-        # Buffer riwayat p2p per channel (6 tick terakhir ~900ms) untuk
-        # membedakan wink (transient spike) vs eyebrow raise (plateau sustained)
-        self._p2p_hist: dict = {1: [], 2: []}
-        self._P2P_HIST_LEN: int = 6
         self._wink_cooldown: float = 0.0
+        self._wink_streak: int = 0
         self._jaw_cooldown: float = 0.0
-        self._jaw_strong_streak: int = 0    # tick berturut-turut p2p EMG di atas threshold
+        self._jaw_strong_streak: int = 0
         self._last_cmd_time: float = 0.0    # timestamp command apapun terakhir fire — global mutex antar detector
         self._relax_cooldown: float = 0.0
         self._relax_streak: int = 0         # tick BERTURUT-TURUT dgn alpha_ratio > threshold (sustained closure)
@@ -174,11 +172,13 @@ class MuseConnector:
         self.heart_rate  = None
         self._eyebrow_cooldown      = 0.0
         self._eyebrow_streak        = 0
+        self._eyebrow_active_until  = 0.0
         self._eyebrow_invalid_ticks = 0
-        self._p2p_hist              = {1: [], 2: []}
         self._wink_cooldown         = 0.0
-        self._jaw_cooldown     = 0.0
-        self._jaw_strong_streak = 0
+        self._wink_streak           = 0
+        self._connected_at          = 0.0
+        self._jaw_cooldown          = 0.0
+        self._jaw_strong_streak     = 0
         self._last_cmd_time    = 0.0
         self._relax_cooldown   = 0.0
         self._relax_streak     = 0
@@ -303,6 +303,7 @@ class MuseConnector:
             print("⚠️  PPG stream not found — HR disabled")
 
         self.running = True
+        self._connected_at = time.time()
         self._set_status("connected")
         print("✅  Muse 2 connected via muselsl!")
         self._loop(eeg_inlet, ppg_inlet)
@@ -434,6 +435,13 @@ class MuseConnector:
                     self.channel_quality[name] = q
                     ch_quality.append(q)
 
+                # Print channel quality setiap 10 tick (~2.5s) untuk diagnosis
+                if not hasattr(self, '_qual_tick'): self._qual_tick = 0
+                self._qual_tick += 1
+                if self._qual_tick % 10 == 0:
+                    print(f"  [QUAL] TP9={ch_quality[0]:.2f} AF7={ch_quality[1]:.2f} "
+                          f"AF8={ch_quality[2]:.2f} TP10={ch_quality[3]:.2f}")
+
                 # ── Band power — hanya dari channel yang cukup bagus ──────
                 # Channel dengan quality <= 0.0 (flat/disconnected/sangat noisy)
                 # dikecualikan karena noise broadband membuat semua band tampak tinggi
@@ -470,46 +478,8 @@ class MuseConnector:
                         _frontal_emg = True
                         _ch_emg[ch]  = True
 
-                # ── Update p2p history (hanya kalau channel valid) ────────────
-                for _ch in (1, 2):
-                    if _ch_valid[_ch]:
-                        self._p2p_hist[_ch].append(_ch_p2p[_ch])
-                        if len(self._p2p_hist[_ch]) > self._P2P_HIST_LEN:
-                            self._p2p_hist[_ch].pop(0)
 
-                # ── Hitung plateau score & transient score ────────────────────
-                # Plateau score: std rendah dari 4 tick terakhir saat nilai tinggi
-                # → eyebrow raise ditahan = nilai stabil / tidak naik-turun tajam
-                # Transient score: p2p tick sekarang vs max history
-                # → wink = spike 1-2 tick lalu langsung turun
-                def _plateau_score(hist, threshold=200.0):
-                    """Seberapa stabil nilai tinggi di 4 tick terakhir (0=transient, 1=plateau)."""
-                    if len(hist) < 4:
-                        return 0.0
-                    recent = hist[-4:]
-                    if max(recent) < threshold:
-                        return 0.0
-                    cv = np.std(recent) / (np.mean(recent) + 1e-6)  # coefficient of variation
-                    return float(np.clip(1.0 - cv, 0.0, 1.0))
 
-                def _transient_score(hist):
-                    """Apakah nilai sekarang sudah turun dari puncaknya (0=plateau, 1=transient)."""
-                    if len(hist) < 3:
-                        return 0.0
-                    peak = max(hist[:-1])  # puncak sebelum tick ini
-                    current = hist[-1]
-                    if peak < 200.0:
-                        return 0.0
-                    drop_ratio = 1.0 - (current / (peak + 1e-6))
-                    return float(np.clip(drop_ratio, 0.0, 1.0))
-
-                _plateau_af7 = _plateau_score(self._p2p_hist[1])
-                _plateau_af8 = _plateau_score(self._p2p_hist[2])
-                _plateau_bilateral = (_plateau_af7 + _plateau_af8) / 2.0
-
-                _transient_af7 = _transient_score(self._p2p_hist[1])
-                _transient_af8 = _transient_score(self._p2p_hist[2])
-                _transient_max = max(_transient_af7, _transient_af8)
 
                 # ── Eyebrow raise detection ────────────────────────────────────
                 # Syarat:
@@ -523,21 +493,38 @@ class MuseConnector:
                 # Dihitung sekali di sini, sebelum semua detector — supaya kalau
                 # eyebrow fire dan update _last_cmd_time di tick ini, wink/jaw
                 # di bawah langsung melihat _cmd_idle = False di tick yang sama.
-                _cmd_idle = (_now - self._last_cmd_time) > 5.0
+                _cmd_idle = (_now - self._last_cmd_time) > 1.5
                 _p2p_af7 = _ch_p2p[1]
                 _p2p_af8 = _ch_p2p[2]
-                _both_strong = _p2p_af7 > 350.0 and _p2p_af8 > 350.0
+                # Baseline idle kamu ~150-270µV — threshold harus di atas ini
+                _both_strong = _p2p_af7 > 300.0 and _p2p_af8 > 300.0
                 _symmetric   = (max(_p2p_af7, _p2p_af8) / (min(_p2p_af7, _p2p_af8) + 1e-6)) < 3.0
-                _bilateral   = _both_strong and _symmetric
+                # Bilateral asimetri: satu channel dominan (>500µV) yang lain >150µV
+                _eb_dominant  = max(_p2p_af7, _p2p_af8) > 500.0
+                _eb_secondary = min(_p2p_af7, _p2p_af8) > 150.0
+                _bilateral    = _both_strong and (_symmetric or (_eb_dominant and _eb_secondary))
 
                 _both_ch_valid = _ch_valid[1] and _ch_valid[2]
-                if _both_ch_valid:
-                    # Kedua channel valid — update streak normal
-                    self._eyebrow_streak = self._eyebrow_streak + 1 if _bilateral else 0
+                # Fallback solo: AF8 sering dropout saat eyebrow raise (elektrode terangkat).
+                # Threshold 1200µV — eyebrow genuine >1700µV, wink <600µV, jadi aman.
+                _af8_dropout   = not _ch_valid[2] or _p2p_af8 < 1.0
+                _eb_af7_solo   = _ch_valid[1] and _af8_dropout and _p2p_af7 > 1200.0
+                _bilateral_eff = _bilateral or _eb_af7_solo
+
+                # Zona blokir: hanya aktif saat bilateral genuinely confirmed
+                if _bilateral_eff:
+                    self._eyebrow_active_until = _now + 0.8
+
+                # Streak: naik hanya saat bilateral_eff, reset segera jika tidak
+                if _bilateral_eff:
+                    self._eyebrow_streak += 1
+                    self._eyebrow_invalid_ticks = 0
+                elif _both_ch_valid:
+                    # Kedua channel valid tapi tidak bilateral → reset keras
+                    self._eyebrow_streak = 0
                     self._eyebrow_invalid_ticks = 0
                 else:
-                    # Salah satu channel drop — toleransi max 1 tick (freeze streak)
-                    # Lebih dari 1 tick invalid berturut-turut → reset
+                    # Satu channel dropout tapi bukan solo → freeze max 1 tick
                     self._eyebrow_invalid_ticks = getattr(self, '_eyebrow_invalid_ticks', 0) + 1
                     if self._eyebrow_invalid_ticks > 1:
                         self._eyebrow_streak = 0
@@ -546,14 +533,15 @@ class MuseConnector:
                     _cd_left = max(0.0, 3.0 - (_now - self._eyebrow_cooldown))
                     print(
                         f"  [EYEBROW] AF7={_p2p_af7:.0f}µV AF8={_p2p_af8:.0f}µV "
-                        f"both_strong={_both_strong} symmetric={_symmetric} bilateral={_bilateral} "
-                        f"streak={self._eyebrow_streak} plateau={_plateau_bilateral:.2f} "
+                        f"both_strong={_both_strong} bilateral={_bilateral_eff}(solo={_eb_af7_solo}) "
+                        f"zone={_now < self._eyebrow_active_until} streak={self._eyebrow_streak} "
                         f"cooldown={_cd_left:.1f}s"
                     )
 
-                if (self._eyebrow_streak >= 3 and
-                        _plateau_bilateral >= 0.4 and
+                _after_wink = (_now - self._wink_cooldown) < 2.0
+                if (self._eyebrow_streak >= 2 and
                         _cmd_idle and
+                        not _after_wink and
                         self.on_eyebrow_raise and
                         _now - self._eyebrow_cooldown > 3.0):
                     self._eyebrow_cooldown = _now
@@ -568,74 +556,106 @@ class MuseConnector:
 
                 # ══════════════════════════════════════════════════════════════
                 # Mental command playground — 3 modalitas campuran
-                # (lihat BRAINBEAT.md: kombinasi sinyal beda jenis ~95% andal)
+                # (lihat BRAINWAVE_MONITOR.md: kombinasi sinyal beda jenis ~95% andal)
                 # ══════════════════════════════════════════════════════════════
 
-                # ── 1) Wink (EOG/EMG asimetri, AF7 vs AF8) ─────────────────────
-                # Kedip satu mata menghasilkan defleksi UNILATERAL — hanya satu
-                # sisi frontal yang aktif kuat. Pembeda dari eyebrow raise yang
-                # BILATERAL (kedua AF7+AF8 sama-sama kuat & simetris):
-                #   - Wink: salah satu channel >> channel lainnya (rasio tinggi)
-                #   - Eyebrow raise: kedua channel kuat & simetris (rasio rendah)
-                # Syarat:
-                #   1. Satu channel > 200µV (ada defleksi berarti di satu sisi)
-                #   2. Rasio max/min > 4.0 (asimetri jelas — sisi lain jauh lebih lemah)
-                #   3. TIDAK _bilateral (bukan eyebrow raise)
-                _wink_strong  = max(_ch_p2p[1], _ch_p2p[2]) > 200.0
-                _wink_side    = _ch_p2p[1] if _ch_p2p[1] >= _ch_p2p[2] else _ch_p2p[2]
-                _wink_weak    = _ch_p2p[2] if _ch_p2p[1] >= _ch_p2p[2] else _ch_p2p[1]
-                _wink_ratio   = _wink_side / (_wink_weak + 1e-6)
-                _wink_asymm   = _wink_ratio > 4.0
-                _wink_eye     = "left" if _ch_p2p[1] >= _ch_p2p[2] else "right"
+                # ── Shared: hitung EMG TP9/TP10 ──────────────────────────────
+                _eyebrow_zone = _now < self._eyebrow_active_until
+                _frontal_active = max(_ch_p2p[1], _ch_p2p[2]) > 200.0
 
-                _cmd_diag["wink_af7"]   = round(_ch_p2p[1], 1)
-                _cmd_diag["wink_af8"]   = round(_ch_p2p[2], 1)
-                _cmd_diag["wink_ratio"] = round(_wink_ratio, 2)
+                _tp_full = {9: 0.0, 10: 0.0}   # 20-100Hz — total EMG untuk jaw
+                for ch, key in ((0, 9), (3, 10)):
+                    if ch_quality[ch] < 0.25:
+                        continue
+                    _td = eeg_win[ch].copy()
+                    DataFilter.detrend(_td, DetrendOperations.CONSTANT.value)
+                    DataFilter.perform_bandpass(_td, SAMPLE_RATE, 20.0, 100.0, 4,
+                        FilterTypes.BUTTERWORTH.value, 0)
+                    _tp_full[key] = round(float(np.ptp(_td)), 1)
+
+                _full_max = max(_tp_full[9], _tp_full[10])
+
+                # ── 1) Wink (EOG/EMG asimetri, AF7 vs AF8) ───────────────────
+                # Kedip satu mata → defleksi UNILATERAL di AF7 atau AF8.
+                # Dibedakan dari eyebrow raise (bilateral) dengan rasio asimetri.
+                _after_eyebrow  = (_now - self._eyebrow_cooldown) < 3.5
+                _during_eyebrow = self._eyebrow_streak >= 1 or _eyebrow_zone
+                # Blokir semua command 5 detik setelah connect — elektrode belum settle
+                _warmup         = (_now - self._connected_at) < 5.0
+                # Jaw clench menarik kulit kepala → AF7 spike artefak mekanik
+                # Blokir wink selama jaw aktif (TP >400µV) atau 2.5s setelah jaw fire
+                _during_jaw     = _full_max > 400.0
+                _after_jaw      = (_now - self._jaw_cooldown) < 2.5
+
+                _wink_af7    = _ch_p2p[1]
+                _wink_af8    = _ch_p2p[2]
+                _wink_side   = max(_wink_af7, _wink_af8)
+                _wink_weak   = min(_wink_af7, _wink_af8)
+                _wink_ratio  = _wink_side / (_wink_weak + 1e-6)
+                _wink_strong = _wink_side > 800.0
+                _wink_asymm  = _wink_ratio > 3.5
+                # Jika channel lemah >150µV → kedua frontal aktif = eyebrow, bukan wink
+                # Jika channel lemah < 1µV → channel dropout, ratio palsu
+                _wink_unilateral = 10.0 <= _wink_weak < 150.0
+                _wink_eye    = "left" if _wink_af7 >= _wink_af8 else "right"
 
                 if _wink_strong:
-                    print(f"  [WINK] AF7={_ch_p2p[1]:.0f}µV AF8={_ch_p2p[2]:.0f}µV ratio={_wink_ratio:.1f} asymm={_wink_asymm} bilateral={_bilateral} transient={_transient_max:.2f}")
+                    print(f"  [WINK] AF7={_wink_af7:.0f}µV AF8={_wink_af8:.0f}µV "
+                          f"ratio={_wink_ratio:.1f} asymm={_wink_asymm} unilat={_wink_unilateral} "
+                          f"during_eyebrow={_during_eyebrow} after_eyebrow={_after_eyebrow} "
+                          f"during_jaw={_during_jaw} after_jaw={_after_jaw}")
 
-                if (_wink_strong and _wink_asymm and not _bilateral and
-                        _transient_max >= 0.15 and
-                        _both_ch_valid and
+                _wink_now = (not _warmup
+                             and _wink_strong and _wink_asymm and _wink_unilateral
+                             and not _bilateral
+                             and not _during_eyebrow and not _after_eyebrow
+                             and not _during_jaw and not _after_jaw
+                             and _both_ch_valid)
+                if _wink_now:
+                    self._wink_streak += 1
+                    # Jika sustained >2 tick = elektrode drift/artifact, bukan wink
+                    if self._wink_streak > 2:
+                        self._wink_streak = 0
+                else:
+                    self._wink_streak = 0
+
+                _cmd_diag["wink_af7"]   = round(_wink_af7, 1)
+                _cmd_diag["wink_af8"]   = round(_wink_af8, 1)
+                _cmd_diag["wink_ratio"] = round(_wink_ratio, 2)
+
+                if (self._wink_streak == 1 and
                         _cmd_idle and
                         self.on_wink and
                         _now - self._wink_cooldown > 3.0):
                     self._wink_cooldown = _now
-                    self._last_cmd_time  = _now
+                    self._last_cmd_time = _now
+                    self._wink_streak   = 0
                     _cmd_diag["cmd_fired"] = "wink"
-                    print(f"😉  Wink FIRED ({_wink_eye}) — AF7={_ch_p2p[1]:.0f}µV AF8={_ch_p2p[2]:.0f}µV ratio={_wink_ratio:.1f}")
+                    print(f"😉  Wink FIRED ({_wink_eye}) — "
+                          f"AF7={_wink_af7:.0f}µV AF8={_wink_af8:.0f}µV ratio={_wink_ratio:.1f}")
                     try:
                         self.on_wink()
                     except Exception as _e:
                         print(f"⚠️  on_wink error: {_e}")
 
-                # ── 2) Jaw clench (EMG broadband sustained, TP9/TP10) ──────────
-                # Sustained ≥2 tick berturut-turut. Guard frontal bleed tetap ada.
-                _jaw_p2p = {9: 0.0, 10: 0.0}
-                _jaw_strong_now = False
-                for ch, key in ((0, 9), (3, 10)):  # TP9=0, TP10=3
-                    if ch_quality[ch] < 0.25:
-                        continue
-                    _jd = eeg_win[ch].copy()
-                    DataFilter.detrend(_jd, DetrendOperations.CONSTANT.value)
-                    DataFilter.perform_bandpass(
-                        _jd, SAMPLE_RATE, 20.0, 100.0, 4,
-                        FilterTypes.BUTTERWORTH.value, 0
-                    )
-                    _jp2p = float(np.ptp(_jd))
-                    _jaw_p2p[key] = round(_jp2p, 1)
-                    if _jp2p > 600.0:
-                        _jaw_strong_now = True
+                # ── 2) Jaw clench ─────────────────────────────────────────────
+                # Signature: full band kuat (>580µV) DAN mid/lo ratio > 1.5
+                # Ini memastikan jaw tidak diblokir oleh tongue streak.
+                _jaw_strong_now = _full_max > 520.0
 
-                if _jaw_strong_now and _bilateral:
-                    _jaw_strong_now = False  # frontal bleed dari eyebrow raise
+                if _jaw_strong_now and (_eyebrow_zone or (_frontal_active and _bilateral)):
+                    _jaw_strong_now = False
 
                 self._jaw_strong_streak = self._jaw_strong_streak + 1 if _jaw_strong_now else 0
 
-                _cmd_diag["jaw_p2p_tp9"]  = _jaw_p2p[9]
-                _cmd_diag["jaw_p2p_tp10"] = _jaw_p2p[10]
+                _cmd_diag["jaw_p2p_tp9"]  = _tp_full[9]
+                _cmd_diag["jaw_p2p_tp10"] = _tp_full[10]
                 _cmd_diag["jaw_streak"]   = self._jaw_strong_streak
+
+                if _full_max > 300.0:
+                    print(f"  [JAW] TP9={_tp_full[9]:.0f}µV TP10={_tp_full[10]:.0f}µV "
+                          f"full={_full_max:.0f}µV strong={_jaw_strong_now} "
+                          f"streak={self._jaw_strong_streak} eyebrow_zone={_eyebrow_zone}")
 
                 if (self._jaw_strong_streak >= 2 and
                         _cmd_idle and
@@ -645,7 +665,7 @@ class MuseConnector:
                     self._last_cmd_time = _now
                     self._jaw_strong_streak = 0
                     _cmd_diag["cmd_fired"] = "jaw_clench"
-                    print(f"🦷  Jaw clench FIRED — TP9={_jaw_p2p[9]:.0f}µV TP10={_jaw_p2p[10]:.0f}µV")
+                    print(f"🦷  Jaw clench FIRED — full={_full_max:.0f}µV")
                     try:
                         self.on_jaw_clench()
                     except Exception as _e:
