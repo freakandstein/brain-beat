@@ -129,7 +129,7 @@ class MuseConnector:
         self.on_eyes_closed_relax: Optional[callable] = None
         self.on_double_blink: Optional[callable] = None   # deprecated
         self.on_teeth_tap: Optional[callable] = None      # deprecated
-        self._eyebrow_invalid_ticks: int = 0
+
         self._wink_cooldown: float = 0.0
         self._wink_streak: int = 0
         self._jaw_cooldown: float = 0.0
@@ -173,7 +173,6 @@ class MuseConnector:
         self._eyebrow_cooldown      = 0.0
         self._eyebrow_streak        = 0
         self._eyebrow_active_until  = 0.0
-        self._eyebrow_invalid_ticks = 0
         self._wink_cooldown         = 0.0
         self._wink_streak           = 0
         self._connected_at          = 0.0
@@ -483,12 +482,11 @@ class MuseConnector:
 
                 # ── Eyebrow raise detection ────────────────────────────────────
                 # Syarat:
-                #   1. Bilateral: AF7 DAN AF8 keduanya >350µV
-                #   2. Simetris: rasio max/min kedua channel < 3.0
-                #      (eyebrow raise genuine = kedua sisi aktif proporsional,
-                #       noise/artifact unilateral biasanya satu sisi jauh lebih tinggi)
-                #   3. Sustained ≥ 2 tick berturut-turut (~500ms) — blink refleks
-                #      selesai dalam 1 tick (~150ms), eyebrow raise ditahan lebih lama.
+                #   1. Bilateral symmetric: AF7 DAN AF8 keduanya >300µV, rasio < 3.0
+                #   2. Bilateral asymmetric: max >500µV, min >200µV (naikkan dari 150µV
+                #      untuk filter sisa jaw/neck artifact yang muncul di satu sisi frontal)
+                #   3. Sustained ≥ 3 tick berturut-turut (~750ms) — false positives dari
+                #      jaw/neck biasanya hanya 1-2 tick; genuine eyebrow raise lebih lama.
                 _now = time.time()
                 # Dihitung sekali di sini, sebelum semua detector — supaya kalau
                 # eyebrow fire dan update _last_cmd_time di tick ini, wink/jaw
@@ -496,52 +494,48 @@ class MuseConnector:
                 _cmd_idle = (_now - self._last_cmd_time) > 1.5
                 _p2p_af7 = _ch_p2p[1]
                 _p2p_af8 = _ch_p2p[2]
-                # Baseline idle kamu ~150-270µV — threshold harus di atas ini
                 _both_strong = _p2p_af7 > 300.0 and _p2p_af8 > 300.0
                 _symmetric   = (max(_p2p_af7, _p2p_af8) / (min(_p2p_af7, _p2p_af8) + 1e-6)) < 3.0
-                # Bilateral asimetri: satu channel dominan (>500µV) yang lain >150µV
+                # Bilateral asimetri: threshold min dinaikkan 150→200µV untuk filter
+                # neck artifact yang kadang muncul sebagai spike satu sisi frontal.
                 _eb_dominant  = max(_p2p_af7, _p2p_af8) > 500.0
-                _eb_secondary = min(_p2p_af7, _p2p_af8) > 150.0
+                _eb_secondary = min(_p2p_af7, _p2p_af8) > 200.0
                 _bilateral    = _both_strong and (_symmetric or (_eb_dominant and _eb_secondary))
 
                 _both_ch_valid = _ch_valid[1] and _ch_valid[2]
-                # Fallback solo: AF8 sering dropout saat eyebrow raise (elektrode terangkat).
-                # Threshold 1200µV — eyebrow genuine >1700µV, wink <600µV, jadi aman.
-                _af8_dropout   = not _ch_valid[2] or _p2p_af8 < 1.0
-                _eb_af7_solo   = _ch_valid[1] and _af8_dropout and _p2p_af7 > 1200.0
-                _bilateral_eff = _bilateral or _eb_af7_solo
+                # Solo fallback dihapus — AF8 dropout saat wink kiri juga memenuhi
+                # syarat solo (AF7 tinggi, AF8=0), menyebabkan cross-fire ke eyebrow.
+                # Eyebrow hanya bisa fire via bilateral (kedua channel valid dan aktif).
+                _bilateral_eff = _bilateral
 
                 # Zona blokir: hanya aktif saat bilateral genuinely confirmed
                 if _bilateral_eff:
                     self._eyebrow_active_until = _now + 0.8
 
-                # Streak: naik hanya saat bilateral_eff, reset segera jika tidak
-                if _bilateral_eff:
+                # Streak: naik hanya saat bilateral_eff, reset langsung jika tidak.
+                # Juga reset saat after_jaw aktif — artefak jaw clench sering
+                # muncul di AF7/AF8 beberapa tick setelah jaw fire.
+                _after_jaw_for_eb = (_now - self._jaw_cooldown) < 4.0
+                if _bilateral_eff and not _after_jaw_for_eb:
                     self._eyebrow_streak += 1
-                    self._eyebrow_invalid_ticks = 0
-                elif _both_ch_valid:
-                    # Kedua channel valid tapi tidak bilateral → reset keras
-                    self._eyebrow_streak = 0
-                    self._eyebrow_invalid_ticks = 0
                 else:
-                    # Satu channel dropout tapi bukan solo → freeze max 1 tick
-                    self._eyebrow_invalid_ticks = getattr(self, '_eyebrow_invalid_ticks', 0) + 1
-                    if self._eyebrow_invalid_ticks > 1:
-                        self._eyebrow_streak = 0
+                    self._eyebrow_streak = 0
 
                 if max(_p2p_af7, _p2p_af8) > 100.0:
                     _cd_left = max(0.0, 3.0 - (_now - self._eyebrow_cooldown))
                     print(
                         f"  [EYEBROW] AF7={_p2p_af7:.0f}µV AF8={_p2p_af8:.0f}µV "
-                        f"both_strong={_both_strong} bilateral={_bilateral_eff}(solo={_eb_af7_solo}) "
+                        f"both_strong={_both_strong} bilateral={_bilateral_eff} "
                         f"zone={_now < self._eyebrow_active_until} streak={self._eyebrow_streak} "
                         f"cooldown={_cd_left:.1f}s"
                     )
 
-                _after_wink = (_now - self._wink_cooldown) < 2.0
-                if (self._eyebrow_streak >= 2 and
+                _after_wink = (_now - self._wink_cooldown) < 4.0
+                _after_jaw  = (_now - self._jaw_cooldown) < 4.0
+                if (self._eyebrow_streak >= 3 and
                         _cmd_idle and
                         not _after_wink and
+                        not _after_jaw and
                         self.on_eyebrow_raise and
                         _now - self._eyebrow_cooldown > 3.0):
                     self._eyebrow_cooldown = _now
@@ -578,7 +572,7 @@ class MuseConnector:
                 # ── 1) Wink (EOG/EMG asimetri, AF7 vs AF8) ───────────────────
                 # Kedip satu mata → defleksi UNILATERAL di AF7 atau AF8.
                 # Dibedakan dari eyebrow raise (bilateral) dengan rasio asimetri.
-                _after_eyebrow  = (_now - self._eyebrow_cooldown) < 3.5
+                _after_eyebrow  = (_now - self._eyebrow_cooldown) < 5.0
                 _during_eyebrow = self._eyebrow_streak >= 1 or _eyebrow_zone
                 # Blokir semua command 5 detik setelah connect — elektrode belum settle
                 _warmup         = (_now - self._connected_at) < 5.0
@@ -639,8 +633,12 @@ class MuseConnector:
                         print(f"⚠️  on_wink error: {_e}")
 
                 # ── 2) Jaw clench ─────────────────────────────────────────────
-                # Signature: full band kuat (>580µV) DAN mid/lo ratio > 1.5
-                # Ini memastikan jaw tidak diblokir oleh tongue streak.
+                # Masseter EMG kuat di TP9/TP10 (>520µV).
+                # Tidak pakai filter simetri — jaw clench kuat juga bilateral.
+                # Discriminasi dari menoleh (neck/SCM) dilakukan via cooldown:
+                # setelah fire, detector lock 4s — cukup untuk skip sustained neck.
+                _tp_ratio = (max(_tp_full[9], _tp_full[10]) /
+                             (min(_tp_full[9], _tp_full[10]) + 1e-6))
                 _jaw_strong_now = _full_max > 520.0
 
                 if _jaw_strong_now and (_eyebrow_zone or (_frontal_active and _bilateral)):
@@ -654,13 +652,14 @@ class MuseConnector:
 
                 if _full_max > 300.0:
                     print(f"  [JAW] TP9={_tp_full[9]:.0f}µV TP10={_tp_full[10]:.0f}µV "
-                          f"full={_full_max:.0f}µV strong={_jaw_strong_now} "
-                          f"streak={self._jaw_strong_streak} eyebrow_zone={_eyebrow_zone}")
+                          f"full={_full_max:.0f}µV ratio={_tp_ratio:.1f} "
+                          f"strong={_jaw_strong_now} streak={self._jaw_strong_streak} "
+                          f"eyebrow_zone={_eyebrow_zone}")
 
-                if (self._jaw_strong_streak >= 2 and
+                if (self._jaw_strong_streak >= 1 and
                         _cmd_idle and
                         self.on_jaw_clench and
-                        _now - self._jaw_cooldown > 2.5):
+                        _now - self._jaw_cooldown > 4.0):
                     self._jaw_cooldown = _now
                     self._last_cmd_time = _now
                     self._jaw_strong_streak = 0

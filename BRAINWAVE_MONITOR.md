@@ -98,33 +98,39 @@ Wink left → AF7 dominates. Wink right → AF8 dominates. The `_wink_unilateral
 Channel    : TP9 (ch0) and TP10 (ch3)
 Filter     : full band (broadband EMG range)
 Condition  : max(TP9, TP10) > 520µV
-Sustained  : ≥ 2 consecutive ticks (~500ms) above threshold
+Sustained  : ≥ 1 tick (masseter EMG is highly impulsive — peak is typically 1 tick)
 Guard      : NOT eyebrow_zone AND NOT (frontal_active AND bilateral_eff)
-Cooldown   : 2.5 seconds
+Cooldown   : 4 seconds
 ```
 
-Masseter EMG is strong, sustained, and confined to temporal channels — completely separate from frontal (AF7/AF8). The eyebrow guard prevents jaw clench from triggering during frontal muscle activity.
+Masseter EMG is strong and confined to temporal channels — completely separate from frontal (AF7/AF8). Neck/SCM muscle (head turn) also activates TP9/TP10 but cannot be reliably separated by symmetry ratio alone (strong jaw clench is also bilateral). The 4-second cooldown is the primary discriminator: jaw clench is a brief impulse, head turns are sustained but only fire once then lock out.
 
 ### Command C — Eyebrow Raise (`on_eyebrow_raise`)
 
 ```
 Channel      : AF7 (ch1) and AF8 (ch2)
 Condition A  : AF7 > 300µV AND AF8 > 300µV, with max/min ratio < 3.0 (symmetric bilateral)
-Condition B  : max(AF7,AF8) > 500µV AND min(AF7,AF8) > 150µV (asymmetric bilateral — one side dominant)
-Condition C  : AF8 dropout (p2p < 1µV or invalid) AND AF7 > 1200µV (solo fallback)
-Sustained    : ≥ 2 consecutive ticks (~500ms)
+Condition B  : max(AF7,AF8) > 500µV AND min(AF7,AF8) > 200µV (asymmetric bilateral)
+Sustained    : ≥ 3 consecutive ticks (~750ms)
 Cooldown     : 3 seconds
 ```
 
-Three bilateral detection paths handle real-world electrode variability: symmetric raise (Condition A), dominant-side raise where AF7 is much stronger due to anatomy (Condition B), and AF8 electrode dropout during raise — common on Muse 2 when scalp moves (Condition C, solo threshold 1200µV to avoid overlap with wink at <600µV).
+**Solo fallback removed** — previously a path allowed AF8 dropout + AF7 > 1200µV to count as eyebrow (electrode lift). This caused cross-fire with left wink (identical signal: AF7 high, AF8 zero). Eyebrow now requires **both channels valid and bilateral**.
+
+`_eb_secondary` threshold raised 150µV → 200µV to filter neck artifact that occasionally bleeds into one frontal channel.
 
 ### Mutual Exclusion (Global Mutex)
 
 All three detectors share a single `_last_cmd_time` timestamp. Once any command fires, a **1.5-second idle window** must pass before any detector can fire again (`_cmd_idle` is checked once per tick before all detectors run).
 
-`_cmd_idle` is evaluated **once per tick, before all detectors run** — if eyebrow fires first in a tick, wink and jaw see `_cmd_idle = False` immediately.
+Additional cross-fire guards (learned from real-world testing):
 
-Additionally, `_eyebrow_active_until` zone (800ms after any bilateral activity) blocks wink and jaw. And `_after_eyebrow` (2.5s after eyebrow fires) further suppresses wink.
+| Guard | Duration | Blocks |
+|---|---|---|
+| `_after_eyebrow` | 5 seconds | Wink detector |
+| `_after_wink` | 4 seconds | Eyebrow detector |
+| `_after_jaw` (for eyebrow) | 4 seconds | Eyebrow streak + fire |
+| `_eyebrow_active_until` zone | 800ms after bilateral activity | Wink and jaw |
 
 ### Design Principle
 
@@ -133,7 +139,7 @@ All three commands use fundamentally different signal dimensions:
 - **Jaw clench** → dedicated *temporal* channels (TP9/TP10), completely separate electrodes
 - **Eyebrow raise** → bilateral frontal activation (both AF7 and AF8 rise together)
 
-The 150µV boundary is the key separator between wink and eyebrow: below 150µV on the weak channel = wink; above 150µV = eyebrow territory. Observed accuracy: ~90% in real-world use.
+The 150µV weak-channel boundary is the key separator between wink and eyebrow: below 150µV = wink; above 200µV = eyebrow territory. Observed accuracy: ~90% in real-world use.
 
 ### Overlay FX
 

@@ -41,10 +41,10 @@ Three distinct gestures trigger a full-screen visual FX overlay at `/overlay/men
 | Command | Gesture | Channel | Detection Logic |
 |---|---|---|---|
 | **A — Wink** | Kedip satu mata | AF7 / AF8 | Strong side >800µV, asymmetry ratio >3.5×, weak side 10–150µV (unilateral EOG) |
-| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >520µV, sustained ≥2 consecutive ticks (~0.5s) |
-| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both >300µV, symmetric ratio <3.0, sustained ≥2 ticks — reflex blinks filtered |
+| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >520µV, ≥1 tick (impulsive), cooldown 4s |
+| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both channels valid + bilateral (both >300µV, ratio <3.0), sustained ≥3 ticks (~750ms) |
 
-**Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_last_cmd_time`, 1.5s) blocks all detectors after any command fires, preventing cross-triggering in both directions. Observed accuracy: ~85–90%.
+**Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_last_cmd_time`, 1.5s) plus per-pair cooldown guards (up to 5s) prevent cross-triggering. Observed accuracy: ~90%.
 
 To test without a Muse: open `/overlay/mental-command` and press **Shift+1**, **Shift+2**, **Shift+3**.
 
