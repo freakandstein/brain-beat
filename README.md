@@ -40,11 +40,11 @@ Three distinct gestures trigger a full-screen visual FX overlay at `/overlay/men
 
 | Command | Gesture | Channel | Detection Logic |
 |---|---|---|---|
-| **A — Wink** | Kedip satu mata | AF7 / AF8 | One side >200µV, asymmetry ratio >4×, NOT both_strong (unilateral EOG) |
-| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >600µV, sustained ≥2 consecutive ticks (~0.5s) |
-| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both >350µV, symmetric ratio <3.0, sustained ≥2 ticks — reflex blinks filtered |
+| **A — Wink** | Kedip satu mata | AF7 / AF8 | Strong side >800µV, asymmetry ratio >3.5×, weak side 10–150µV (unilateral EOG) |
+| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >520µV, sustained ≥2 consecutive ticks (~0.5s) |
+| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both >300µV, symmetric ratio <3.0, sustained ≥2 ticks — reflex blinks filtered |
 
-**Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_cmd_idle`, 3.5s) blocks all detectors after any command fires, preventing cross-triggering in both directions. Observed accuracy: ~85–90%.
+**Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_last_cmd_time`, 1.5s) blocks all detectors after any command fires, preventing cross-triggering in both directions. Observed accuracy: ~85–90%.
 
 To test without a Muse: open `/overlay/mental-command` and press **Shift+1**, **Shift+2**, **Shift+3**.
 
@@ -89,7 +89,7 @@ The `+0.02` bias nudges the threshold slightly toward calm to avoid over-sensiti
 
 Facial muscle artifacts (EMG) are the biggest source of false positives in frontal EEG:
 
-- **Pass 1** — pre-scan AF7/AF8: if amplitude > 150µV or high-freq ratio > 0.50 → `frontal_emg = True`
+- **Pass 1** — pre-scan AF7/AF8: if amplitude > 150µV or high-freq ratio > 0.80 → `frontal_emg = True`
 - **Pass 2** — if `frontal_emg`: beta from TP9/TP10 is also blanked (volume conduction)
 - Beta is capped at 13–25 Hz (not 30 Hz) to avoid EMG contamination from jaw muscles
 

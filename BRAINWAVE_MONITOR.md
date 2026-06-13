@@ -83,21 +83,21 @@ Three active commands are detected in real-time, each using distinct signal dime
 
 ```
 Channel      : AF7 (ch1) and AF8 (ch2)
-Condition    : max(p2p_AF7, p2p_AF8) > 300µV         (above noise floor)
+Condition    : strong side > 800µV                    (above noise floor)
 Asymmetry    : max / min ratio > 3.5                  (one side dominates — unilateral)
-Unilateral   : min(p2p_AF7, p2p_AF8) between 1–150µV (weak side low = truly unilateral)
+Unilateral   : min(p2p_AF7, p2p_AF8) between 10–150µV (weak side low = truly unilateral)
 Guard        : NOT bilateral_eff, NOT during/after eyebrow zone
 Cooldown     : 3 seconds
 ```
 
-Wink left → AF7 dominates. Wink right → AF8 dominates. The `_wink_unilateral` check (weak channel 1–150µV) is the key separator from eyebrow raise — if the weak channel is above 150µV, both frontal electrodes are active and it's treated as eyebrow activity, not a wink.
+Wink left → AF7 dominates. Wink right → AF8 dominates. The `_wink_unilateral` check (weak channel 10–150µV) is the key separator from eyebrow raise — if the weak channel is above 150µV, both frontal electrodes are active and it's treated as eyebrow activity, not a wink.
 
 ### Command B — Jaw Clench (`on_jaw_clench`)
 
 ```
 Channel    : TP9 (ch0) and TP10 (ch3)
-Filter     : 20–100 Hz bandpass (broadband EMG range)
-Condition  : p2p > 520µV on either channel
+Filter     : full band (broadband EMG range)
+Condition  : max(TP9, TP10) > 520µV
 Sustained  : ≥ 2 consecutive ticks (~500ms) above threshold
 Guard      : NOT eyebrow_zone AND NOT (frontal_active AND bilateral_eff)
 Cooldown   : 2.5 seconds
@@ -110,7 +110,7 @@ Masseter EMG is strong, sustained, and confined to temporal channels — complet
 ```
 Channel      : AF7 (ch1) and AF8 (ch2)
 Condition A  : AF7 > 300µV AND AF8 > 300µV, with max/min ratio < 3.0 (symmetric bilateral)
-Condition B  : max(AF7,AF8) > 500µV AND min(AF7,AF8) > 150µV (asymmetric bilateral — AF7 dominant)
+Condition B  : max(AF7,AF8) > 500µV AND min(AF7,AF8) > 150µV (asymmetric bilateral — one side dominant)
 Condition C  : AF8 dropout (p2p < 1µV or invalid) AND AF7 > 1200µV (solo fallback)
 Sustained    : ≥ 2 consecutive ticks (~500ms)
 Cooldown     : 3 seconds
@@ -120,7 +120,7 @@ Three bilateral detection paths handle real-world electrode variability: symmetr
 
 ### Mutual Exclusion (Global Mutex)
 
-All three detectors share a single `_last_cmd_time` timestamp. Once any command fires, a **1.5-second idle window** must pass before any detector can fire again.
+All three detectors share a single `_last_cmd_time` timestamp. Once any command fires, a **1.5-second idle window** must pass before any detector can fire again (`_cmd_idle` is checked once per tick before all detectors run).
 
 `_cmd_idle` is evaluated **once per tick, before all detectors run** — if eyebrow fires first in a tick, wink and jaw see `_cmd_idle = False` immediately.
 
@@ -297,7 +297,7 @@ chunk, _ = eeg_inlet.pull_chunk(timeout=0.0, max_samples=512)
 # 4. Pass 1: pre-scan AF7/AF8 for frontal EMG
 _frontal_emg = False
 for ch in (1, 2):  # AF7, AF8
-    if np.ptp(filtered) > 150.0 or b_hi / (b_lo + 1e-6) > 0.50:
+    if np.ptp(filtered) > 150.0 or b_hi / (b_lo + 1e-6) > 0.80:
         _frontal_emg = True; break
 
 # 5. Pass 2: band power per channel
