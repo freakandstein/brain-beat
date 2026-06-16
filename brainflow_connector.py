@@ -139,6 +139,19 @@ class MuseConnector:
         self._relax_streak: int = 0         # tick BERTURUT-TURUT dgn alpha_ratio > threshold (sustained closure)
         self._relax_alpha_hist: list = []   # buffer raw frontal alpha power (uV^2) untuk baseline
 
+        # ── Adaptive threshold per-sesi ───────────────────────────────────
+        # Selama 15 detik pertama (CALIBRATION_TICKS tick @ ~6.7Hz), kumpulkan
+        # sampel noise EMG saat istirahat. Threshold = median_baseline * multiplier.
+        # Fallback ke nilai hardcoded jika kalibrasi belum selesai.
+        self._CALIBRATION_TICKS = 100       # ~15 detik @ 6.7 Hz
+        self._calib_frontal: list = []      # p2p max(AF7,AF8) saat istirahat
+        self._calib_temporal: list = []     # p2p max(TP9,TP10) saat istirahat
+        self._calib_done: bool = False
+        # threshold aktif (dipakai detector) — diinisialisasi ke nilai hardcoded
+        self._thr_wink:    float = 800.0
+        self._thr_eyebrow: float = 300.0
+        self._thr_jaw:     float = 520.0
+
         # Internal
         self.running       = False
         self._loop_tick    = 0
@@ -182,6 +195,12 @@ class MuseConnector:
         self._relax_cooldown   = 0.0
         self._relax_streak     = 0
         self._relax_alpha_hist = []
+        self._calib_frontal    = []
+        self._calib_temporal   = []
+        self._calib_done       = False
+        self._thr_wink         = 800.0
+        self._thr_eyebrow      = 300.0
+        self._thr_jaw          = 520.0
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
         self.raw_bands   = {"alpha": 0.0, "beta": 0.0, "theta": 0.0}
@@ -353,6 +372,7 @@ class MuseConnector:
         _csv_w     = csv.writer(_csv_file)
         _csv_w.writerow(['time', 'elapsed_s', 'alpha', 'beta', 'theta', 'tbr', 'state', 'hr',
                          'eog_extreme', 'eog_zcross', 'frontal_emg', 'blink_candidates',
+                         'wink_af7', 'wink_af8', 'wink_ratio',
                          'jaw_p2p_tp9', 'jaw_p2p_tp10', 'jaw_streak',
                          'alpha_pow', 'alpha_baseline', 'alpha_ratio', 'relax_streak',
                          'cmd_fired'])
@@ -363,6 +383,7 @@ class MuseConnector:
         # ditulis ke CSV supaya bisa dianalisa offline dari file log session.
         _cmd_diag = {
             "eog_extreme": "", "eog_zcross": "", "frontal_emg": "", "blink_candidates": "",
+            "wink_af7": "", "wink_af8": "", "wink_ratio": "",
             "jaw_p2p_tp9": "", "jaw_p2p_tp10": "", "jaw_streak": "",
             "alpha_pow": "", "alpha_baseline": "", "alpha_ratio": "", "relax_streak": "",
             "cmd_fired": "",
@@ -482,9 +503,8 @@ class MuseConnector:
 
                 # ── Eyebrow raise detection ────────────────────────────────────
                 # Syarat:
-                #   1. Bilateral symmetric: AF7 DAN AF8 keduanya >300µV, rasio < 3.0
-                #   2. Bilateral asymmetric: max >500µV, min >200µV (naikkan dari 150µV
-                #      untuk filter sisa jaw/neck artifact yang muncul di satu sisi frontal)
+                #   1. Bilateral symmetric: AF7 DAN AF8 keduanya >thr_eyebrow, rasio < 3.0
+                #   2. Bilateral asymmetric: max >thr_eyebrow*1.67, min >thr_eyebrow*0.67
                 #   3. Sustained ≥ 3 tick berturut-turut (~750ms) — false positives dari
                 #      jaw/neck biasanya hanya 1-2 tick; genuine eyebrow raise lebih lama.
                 _now = time.time()
@@ -494,12 +514,11 @@ class MuseConnector:
                 _cmd_idle = (_now - self._last_cmd_time) > 1.5
                 _p2p_af7 = _ch_p2p[1]
                 _p2p_af8 = _ch_p2p[2]
-                _both_strong = _p2p_af7 > 300.0 and _p2p_af8 > 300.0
+                _both_strong = _p2p_af7 > self._thr_eyebrow and _p2p_af8 > self._thr_eyebrow
                 _symmetric   = (max(_p2p_af7, _p2p_af8) / (min(_p2p_af7, _p2p_af8) + 1e-6)) < 3.0
-                # Bilateral asimetri: threshold min dinaikkan 150→200µV untuk filter
-                # neck artifact yang kadang muncul sebagai spike satu sisi frontal.
-                _eb_dominant  = max(_p2p_af7, _p2p_af8) > 500.0
-                _eb_secondary = min(_p2p_af7, _p2p_af8) > 200.0
+                # Bilateral asimetri: dominant > 1.67×, secondary > 0.67× threshold eyebrow
+                _eb_dominant  = max(_p2p_af7, _p2p_af8) > self._thr_eyebrow * 1.67
+                _eb_secondary = min(_p2p_af7, _p2p_af8) > self._thr_eyebrow * 0.67
                 _bilateral    = _both_strong and (_symmetric or (_eb_dominant and _eb_secondary))
 
                 _both_ch_valid = _ch_valid[1] and _ch_valid[2]
@@ -510,7 +529,7 @@ class MuseConnector:
 
                 # Zona blokir: hanya aktif saat bilateral genuinely confirmed
                 if _bilateral_eff:
-                    self._eyebrow_active_until = _now + 0.8
+                    self._eyebrow_active_until = _now + 1.5
 
                 # Streak: naik hanya saat bilateral_eff, reset langsung jika tidak.
                 # Juga reset saat after_jaw aktif — artefak jaw clench sering
@@ -521,7 +540,7 @@ class MuseConnector:
                 else:
                     self._eyebrow_streak = 0
 
-                if max(_p2p_af7, _p2p_af8) > 100.0:
+                if max(_p2p_af7, _p2p_af8) > self._thr_eyebrow * 0.33:
                     _cd_left = max(0.0, 3.0 - (_now - self._eyebrow_cooldown))
                     print(
                         f"  [EYEBROW] AF7={_p2p_af7:.0f}µV AF8={_p2p_af8:.0f}µV "
@@ -555,7 +574,7 @@ class MuseConnector:
 
                 # ── Shared: hitung EMG TP9/TP10 ──────────────────────────────
                 _eyebrow_zone = _now < self._eyebrow_active_until
-                _frontal_active = max(_ch_p2p[1], _ch_p2p[2]) > 200.0
+                _frontal_active = max(_ch_p2p[1], _ch_p2p[2]) > self._thr_eyebrow * 0.67
 
                 _tp_full = {9: 0.0, 10: 0.0}   # 20-100Hz — total EMG untuk jaw
                 for ch, key in ((0, 9), (3, 10)):
@@ -569,6 +588,32 @@ class MuseConnector:
 
                 _full_max = max(_tp_full[9], _tp_full[10])
 
+                # ── Adaptive threshold kalibrasi (15 detik pertama sesi) ──────
+                # Kumpulkan sampel EMG selama 15 detik pertama tanpa syarat —
+                # kalibrasi tetap jalan meski ada command fire di awal sesi.
+                # Buffer merekam noise baseline termasuk saat gesture, tapi
+                # median (bukan mean) membuat outlier spike tidak mempengaruhi hasil.
+                if not self._calib_done:
+                    self._calib_frontal.append(max(_ch_p2p[1], _ch_p2p[2]))
+                    self._calib_temporal.append(_full_max)
+                    if len(self._calib_frontal) >= self._CALIBRATION_TICKS:
+                        _f_med = float(np.median(self._calib_frontal))
+                        _t_med = float(np.median(self._calib_temporal))
+                        # Multiplier: 3× median untuk eyebrow/wink, 4× untuk jaw
+                        # (jaw clench jauh lebih kuat dari noise, margin lebih besar)
+                        # Clamp ke range aman agar tidak terlalu sensitif atau kebal.
+                        self._thr_eyebrow = float(np.clip(_f_med * 3.0,  80.0, 400.0))
+                        self._thr_wink    = float(np.clip(_f_med * 5.0, 300.0, 1000.0))
+                        self._thr_jaw     = float(np.clip(_t_med * 4.0, 300.0,  700.0))
+                        self._calib_done  = True
+                        print(
+                            f"✅  EMG calibration done — "
+                            f"frontal_baseline={_f_med:.0f}µV temporal_baseline={_t_med:.0f}µV  |  "
+                            f"thr_eyebrow={self._thr_eyebrow:.0f}µV "
+                            f"thr_wink={self._thr_wink:.0f}µV "
+                            f"thr_jaw={self._thr_jaw:.0f}µV"
+                        )
+
                 # ── 1) Wink (EOG/EMG asimetri, AF7 vs AF8) ───────────────────
                 # Kedip satu mata → defleksi UNILATERAL di AF7 atau AF8.
                 # Dibedakan dari eyebrow raise (bilateral) dengan rasio asimetri.
@@ -578,7 +623,7 @@ class MuseConnector:
                 _warmup         = (_now - self._connected_at) < 5.0
                 # Jaw clench menarik kulit kepala → AF7 spike artefak mekanik
                 # Blokir wink selama jaw aktif (TP >400µV) atau 2.5s setelah jaw fire
-                _during_jaw     = _full_max > 400.0
+                _during_jaw     = _full_max > self._thr_jaw * 0.77
                 _after_jaw      = (_now - self._jaw_cooldown) < 2.5
 
                 _wink_af7    = _ch_p2p[1]
@@ -586,11 +631,11 @@ class MuseConnector:
                 _wink_side   = max(_wink_af7, _wink_af8)
                 _wink_weak   = min(_wink_af7, _wink_af8)
                 _wink_ratio  = _wink_side / (_wink_weak + 1e-6)
-                _wink_strong = _wink_side > 800.0
-                _wink_asymm  = _wink_ratio > 3.5
-                # Jika channel lemah >150µV → kedua frontal aktif = eyebrow, bukan wink
+                _wink_strong = _wink_side > self._thr_wink
+                _wink_asymm  = _wink_ratio > 2.0
+                # Jika channel lemah >300µV → kedua frontal aktif = eyebrow, bukan wink
                 # Jika channel lemah < 1µV → channel dropout, ratio palsu
-                _wink_unilateral = 10.0 <= _wink_weak < 150.0
+                _wink_unilateral = 10.0 <= _wink_weak < 300.0
                 _wink_eye    = "left" if _wink_af7 >= _wink_af8 else "right"
 
                 if _wink_strong:
@@ -639,7 +684,7 @@ class MuseConnector:
                 # setelah fire, detector lock 4s — cukup untuk skip sustained neck.
                 _tp_ratio = (max(_tp_full[9], _tp_full[10]) /
                              (min(_tp_full[9], _tp_full[10]) + 1e-6))
-                _jaw_strong_now = _full_max > 520.0
+                _jaw_strong_now = _full_max > self._thr_jaw
 
                 if _jaw_strong_now and (_eyebrow_zone or (_frontal_active and _bilateral)):
                     _jaw_strong_now = False
@@ -650,7 +695,7 @@ class MuseConnector:
                 _cmd_diag["jaw_p2p_tp10"] = _tp_full[10]
                 _cmd_diag["jaw_streak"]   = self._jaw_strong_streak
 
-                if _full_max > 300.0:
+                if _full_max > self._thr_jaw * 0.58:
                     print(f"  [JAW] TP9={_tp_full[9]:.0f}µV TP10={_tp_full[10]:.0f}µV "
                           f"full={_full_max:.0f}µV ratio={_tp_ratio:.1f} "
                           f"strong={_jaw_strong_now} streak={self._jaw_strong_streak} "
@@ -926,6 +971,7 @@ class MuseConnector:
                         round(ema_tbr, 3), state_hint,
                         round(self.heart_rate) if self.heart_rate else '',
                         _cmd_diag["eog_extreme"], _cmd_diag["eog_zcross"], _cmd_diag["frontal_emg"], _cmd_diag["blink_candidates"],
+                        _cmd_diag["wink_af7"], _cmd_diag["wink_af8"], _cmd_diag["wink_ratio"],
                         _cmd_diag["jaw_p2p_tp9"], _cmd_diag["jaw_p2p_tp10"], _cmd_diag["jaw_streak"],
                         _cmd_diag["alpha_pow"], _cmd_diag["alpha_baseline"], _cmd_diag["alpha_ratio"], _cmd_diag["relax_streak"],
                         _cmd_diag["cmd_fired"],
