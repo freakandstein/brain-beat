@@ -76,6 +76,11 @@ def overlay_mental_command():
     return render_template("overlay_mental_command.html")
 
 
+@app.route("/overlay/brainwave-visual")
+def overlay_brainwave_visual():
+    return render_template("overlay_brainwave_visual.html")
+
+
 # ── socket events ─────────────────────────────────────────────────────────────
 
 @socketio.on("connect")

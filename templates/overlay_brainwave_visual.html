@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Brainwave Visual Overlay</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: transparent; overflow: hidden; }
+    canvas { display: block; position: fixed; inset: 0; }
+
+    #controls {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 12px;
+      z-index: 10;
+    }
+    .btn {
+      padding: 10px 24px;
+      border: 1px solid rgba(255,255,255,0.3);
+      background: rgba(0,0,0,0.5);
+      color: #fff;
+      cursor: pointer;
+      font-family: monospace;
+      font-size: 13px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      border-radius: 2px;
+      transition: all 0.3s;
+    }
+    .btn:hover { background: rgba(255,255,255,0.1); }
+    .btn.active { border-color: #fff; background: rgba(255,255,255,0.15); }
+
+    #state-label {
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.5);
+      font-family: monospace;
+      font-size: 11px;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="state-label">--</div>
+  <canvas id="c"></canvas>
+
+  <script src="/static/socket.io.min.js"></script>
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ── State & transition ─────────────────────────────────────────────────
+    const STATE_CONFIG = {
+      calm:  { r: 40,  g: 160, b: 255, pulseSpeed: 0.0006, glowSize: 0.15, flicker: 0   },
+      flow:  { r: 255, g: 160, b: 30,  pulseSpeed: 0.0014, glowSize: 0.12, flicker: 0   },
+      tense: { r: 255, g: 30,  b: 20,  pulseSpeed: 0.0028, glowSize: 0.18, flicker: 0.6 },
+    };
+
+    let currentState = null;
+    let fromConfig = { ...STATE_CONFIG.calm };
+    let toConfig   = { ...STATE_CONFIG.calm };
+    let blend = 1;
+
+    function setState(s) {
+      const cfg = STATE_CONFIG[s];
+      if (!cfg || s === currentState) return;
+      fromConfig = lerpConfig(fromConfig, toConfig, blend);
+      toConfig   = cfg;
+      blend = 0;
+      currentState = s;
+      document.getElementById('state-label').textContent = s.toUpperCase();
+    }
+
+    function lerpConfig(a, b, t) {
+      const out = {};
+      for (const k in a) out[k] = a[k] + (b[k] - a[k]) * t;
+      return out;
+    }
+
+    function easeInOut(t) {
+      return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+    }
+
+    // ── Draw vignette ──────────────────────────────────────────────────────
+    function drawVignette(t) {
+      blend = Math.min(1, blend + 0.012);
+      const e = easeInOut(blend);
+      const cfg = lerpConfig(fromConfig, toConfig, e);
+
+      const { r, g, b, pulseSpeed, glowSize, flicker } = cfg;
+
+      // base breathe pulse: 0.55 → 1.0
+      let pulse = Math.sin(t * pulseSpeed) * 0.225 + 0.775;
+
+      // tense flicker: random micro-variation on top
+      if (flicker > 0) {
+        pulse += (Math.random() - 0.5) * flicker * 0.15;
+        pulse = Math.max(0.4, Math.min(1, pulse));
+      }
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Four edge gradients — top, bottom, left, right
+      const edges = [
+        { x0: W/2, y0: 0,   x1: W/2, y1: H * glowSize,  axis: 'v', side: 'top'    },
+        { x0: W/2, y0: H,   x1: W/2, y1: H*(1-glowSize), axis: 'v', side: 'bottom' },
+        { x0: 0,   y0: H/2, x1: W * glowSize,   y1: H/2, axis: 'h', side: 'left'   },
+        { x0: W,   y0: H/2, x1: W*(1-glowSize), y1: H/2, axis: 'h', side: 'right'  },
+      ];
+
+      for (const edge of edges) {
+        const grad = ctx.createLinearGradient(edge.x0, edge.y0, edge.x1, edge.y1);
+        const maxAlpha = 0.28 * pulse;
+        grad.addColorStop(0,    `rgba(${r},${g},${b},${maxAlpha.toFixed(3)})`);
+        grad.addColorStop(0.4,  `rgba(${r},${g},${b},${(maxAlpha * 0.3).toFixed(3)})`);
+        grad.addColorStop(1,    `rgba(${r},${g},${b},0)`);
+
+        let rx, ry, rw, rh;
+        if (edge.side === 'top')    { rx = 0; ry = 0; rw = W; rh = H * glowSize; }
+        if (edge.side === 'bottom') { rx = 0; ry = H * (1 - glowSize); rw = W; rh = H * glowSize; }
+        if (edge.side === 'left')   { rx = 0; ry = 0; rw = W * glowSize; rh = H; }
+        if (edge.side === 'right')  { rx = W * (1 - glowSize); ry = 0; rw = W * glowSize; rh = H; }
+
+        ctx.fillStyle = grad;
+        ctx.fillRect(rx, ry, rw, rh);
+      }
+
+      // Corner boost — radial glow at each corner for richness
+      const cornerSize = Math.min(W, H) * (glowSize * 1.1);
+      const corners = [
+        { cx: 0, cy: 0 }, { cx: W, cy: 0 },
+        { cx: 0, cy: H }, { cx: W, cy: H },
+      ];
+      for (const { cx, cy } of corners) {
+        const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, cornerSize);
+        grad.addColorStop(0,   `rgba(${r},${g},${b},${(0.22 * pulse).toFixed(3)})`);
+        grad.addColorStop(0.5, `rgba(${r},${g},${b},${(0.07 * pulse).toFixed(3)})`);
+        grad.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(Math.min(cx, cx - cornerSize), Math.min(cy, cy - cornerSize), cornerSize, cornerSize);
+      }
+    }
+
+    // ── Socket.IO — driven by EEG state_update ────────────────────────────
+    const socket = io();
+    socket.on('state_update', data => {
+      if (data.state) setState(data.state);
+    });
+
+    // ── Main loop ──────────────────────────────────────────────────────────
+    function loop(t) {
+      drawVignette(t);
+      requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
