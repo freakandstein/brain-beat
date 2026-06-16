@@ -11,10 +11,11 @@
 | **Mental Command Playground** | ✅ Selesai | 3 active commands via `/overlay/mental-command` — wink, jaw clench, eyebrow raise, masing-masing warna berbeda |
 | **State detection** | ✅ Selesai | 3-state calm/flow/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
 | **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
-| **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 >350µV + symmetry check (ratio <3.0) + sustained ≥2 tick (~500ms) + cooldown 3s — reflex blink difilter oleh sustained requirement |
-| **Wink detection** | ✅ Selesai | Unilateral: satu sisi AF7/AF8 >200µV + asimetri ratio >4.0 + NOT both_strong — Command A playground |
-| **Jaw clench detection** | ✅ Selesai | TP9/TP10 EMG p2p >600µV sustained ≥2 tick + guard frontal bleed — Command B playground |
-| **Global mutex antar detector** | ✅ Selesai | `_last_cmd_time` + `_cmd_idle` (3.5s window) — satu command fire → semua detector diblokir, dua arah, dihitung sekali per tick sebelum semua detektor jalan |
+| **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 > thr_eyebrow (adaptive, default 300µV) + symmetry check (ratio <3.0) + sustained ≥3 tick (~750ms) + cooldown 3s + eyebrow_zone 1.5s |
+| **Wink detection** | ✅ Selesai | Unilateral: satu sisi AF7/AF8 > thr_wink (adaptive, default 800µV) + asimetri ratio >2.0 + weak side 10–300µV — Command A playground |
+| **Jaw clench detection** | ✅ Selesai | TP9/TP10 EMG p2p > thr_jaw (adaptive, default 520µV) sustained ≥1 tick + guard frontal bleed + cooldown 4s — Command B playground |
+| **Adaptive EMG threshold per-sesi** | ✅ Selesai | 15 detik pertama ukur baseline noise frontal+temporal → thr_eyebrow/wink/jaw dihitung otomatis via median×multiplier, clamp ke range aman |
+| **Global mutex antar detector** | ✅ Selesai | `_last_cmd_time` + `_cmd_idle` (1.5s window) — satu command fire → semua detector diblokir, dua arah, dihitung sekali per tick sebelum semua detektor jalan |
 | **Auto-reconnect** | ✅ Selesai | Jika koneksi Muse putus, retry otomatis dengan backoff 3s→5s→10s→15s, status reconnecting di UI |
 | **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
 | **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
@@ -132,9 +133,13 @@ Band Power θ/α/β              ← [✅ Impl.] 4–8 / 8–13 / 13–25 Hz (de
     ↓
 EMG Rejection (2-pass)        ← [✅ Impl.] Pass 1: scan AF7/AF8 p2p + spektral rasio (tanpa break)
     ↓                                      Pass 2: beta dari TP9/TP10 di-blank jika frontal EMG aktif
-Eyebrow Raise Detection       ← [✅ Impl.] AF7+AF8 keduanya >350µV + simetris (ratio <3.0) + sustained ≥2 tick + cooldown 3s
+Adaptive EMG Calibration      ← [✅ Impl.] 15 detik pertama: ukur baseline noise frontal+temporal
+    ↓                                      thr_eyebrow = median_frontal×3.0 (80–400µV)
+    ↓                                      thr_wink = median_frontal×5.0 (300–1000µV)
+    ↓                                      thr_jaw = median_temporal×4.0 (300–700µV)
+Eyebrow Raise Detection       ← [✅ Impl.] AF7+AF8 keduanya >thr_eyebrow + simetris (ratio <3.0) + sustained ≥3 tick + cooldown 3s + zone 1.5s
     ↓                                      Bilateral sustained = eyebrow raise genuine; blink refleks = 1 tick (difilter)
-    ↓  Global mutex (_cmd_idle 3.5s)       Semua detector share _last_cmd_time — satu fire → blokir semua, dua arah
+    ↓  Global mutex (_cmd_idle 1.5s)       Semua detector share _last_cmd_time — satu fire → blokir semua, dua arah
 Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.20
     ↓                                     Juga track raw µV² + spectral centroid Hz untuk display UI
 Mental State Classifier       ← [✅ Impl.] 3-state calm/flow/tense

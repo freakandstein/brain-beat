@@ -40,11 +40,13 @@ Three distinct gestures trigger a full-screen visual FX overlay at `/overlay/men
 
 | Command | Gesture | Channel | Detection Logic |
 |---|---|---|---|
-| **A — Wink** | Kedip satu mata | AF7 / AF8 | Strong side >800µV, asymmetry ratio >3.5×, weak side 10–150µV (unilateral EOG) |
-| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >520µV, ≥1 tick (impulsive), cooldown 4s |
-| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both channels valid + bilateral (both >300µV, ratio <3.0), sustained ≥3 ticks (~750ms) |
+| **A — Wink** | Kedip satu mata | AF7 / AF8 | Strong side >thr_wink (adaptive, default 800µV), asymmetry ratio >2.0×, weak side 10–300µV (unilateral EOG) |
+| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >thr_jaw (adaptive, default 520µV), ≥1 tick (impulsive), cooldown 4s |
+| **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both channels valid + bilateral (both >thr_eyebrow adaptive, ratio <3.0), sustained ≥3 ticks (~750ms) |
 
 **Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_last_cmd_time`, 1.5s) plus per-pair cooldown guards (up to 5s) prevent cross-triggering. Observed accuracy: ~90%.
+
+**Adaptive EMG threshold**: during the first ~15 seconds of each session, the connector measures resting EMG noise on frontal (AF7/AF8) and temporal (TP9/TP10) channels. Thresholds are computed as `median_baseline × multiplier` and clamped to a safe range, replacing the hardcoded defaults for the rest of the session. Printed to terminal as `✅ EMG calibration done`.
 
 To test without a Muse: open `/overlay/mental-command` and press **Shift+1**, **Shift+2**, **Shift+3**.
 
