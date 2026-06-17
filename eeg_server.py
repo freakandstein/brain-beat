@@ -236,10 +236,33 @@ def main():
             socketio.emit("jaw_clench", {})
             obs_connector.switch_scene("jaw_clench")
 
+        def _double_wink_cb():
+            print("👀  Double wink detected — triggering overlay")
+            socketio.emit("double_wink", {})
+            obs_connector.switch_scene("double_wink")
+
+        def _double_jaw_cb():
+            print("🦷🦷  Double jaw detected — triggering overlay")
+            socketio.emit("double_jaw", {})
+            obs_connector.switch_scene("double_jaw")
+
+        def _combo_wink_jaw_cb():
+            print("🤜  Combo wink+jaw detected — triggering overlay")
+            socketio.emit("combo_wink_jaw", {})
+            obs_connector.switch_scene("combo_wink_jaw")
+
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         muse.on_eyebrow_raise = _eyebrow_cb
-        muse.on_wink          = _wink_cb
-        muse.on_jaw_clench    = _jaw_clench_cb
+        # Wink & jaw single callbacks sekarang dihandle oleh composer,
+        # bukan langsung dari MuseConnector.
+        muse.composer.on_wink           = _wink_cb
+        muse.composer.on_jaw_clench     = _jaw_clench_cb
+        muse.composer.on_double_jaw     = _double_jaw_cb
+        # FOKUS: hanya double_jaw yang diaktifkan dulu. Double wink & combo
+        # wink+jaw di-take out sementara (callback tidak di-wire → composer
+        # tidak akan fire keduanya; lihat composer.ENABLE_* flag).
+        # muse.composer.on_double_wink    = _double_wink_cb
+        # muse.composer.on_combo_wink_jaw = _combo_wink_jaw_cb
         # Catatan: eyes_closed_relax tidak lagi dipakai playground (diganti
         # eyebrow_raise — gesture cepat & deliberate, lebih konsisten dgn
         # double-blink & jaw clench dibanding "merem-relaks 2 detik" yg
