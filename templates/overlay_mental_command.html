@@ -179,9 +179,29 @@
     pointer-events: none;
   }
   #legend b { letter-spacing: 0.15em; color: #ffffffcc; }
-  .leg-blink  { color: #00eaff; }
-  .leg-jaw    { color: #ff5e3a; }
-  .leg-relax  { color: #7cff6b; }
+  .leg-blink      { color: #00eaff; }
+  .leg-jaw        { color: #ff5e3a; }
+  .leg-relax      { color: #7cff6b; }
+  .leg-sep        { color: #ffffff33; margin: 2px 0; border: none; border-top: 1px solid #ffffff18; }
+  .leg-double-wink { color: #ff80ff; }
+  .leg-double-jaw  { color: #ffb347; }
+  .leg-combo-wj    { color: #ffe066; }
+
+  /* ── Combo badge (shown inside HUD for combo commands) ── */
+  #combo-badge {
+    font-size: clamp(0.38rem, 0.6vw, 0.55rem);
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--accent, #00eaff);
+    background: rgba(0,0,0,0.45);
+    border: 1px solid var(--accent-dim, #00eaff44);
+    border-radius: 3px;
+    padding: 0.18em 0.8em;
+    margin-bottom: 0.5em;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  #combo-badge.show { opacity: 1; }
 
   /* ── Active state ── */
   #overlay.active { opacity: 1; }
@@ -199,10 +219,14 @@
 <!-- Dev legend -->
 <div id="legend">
   <div><b>MENTAL COMMAND PLAYGROUND</b></div>
-  <div class="leg-blink">● Wink → Command A (EOG, AF7/AF8)</div>
-  <div class="leg-jaw">● Jaw clench → Command B (EMG, TP9/TP10)</div>
-  <div class="leg-relax">● Eyebrow raise → Command C (EMG, AF7/AF8)</div>
-  <div style="opacity:0.5;margin-top:4px">keys: Shift+1 / Shift+2 / Shift+3</div>
+  <div class="leg-blink">● Wink → Cmd A (EOG, AF7/AF8)</div>
+  <div class="leg-jaw">● Jaw clench → Cmd B (EMG, TP9/TP10)</div>
+  <div class="leg-relax">● Eyebrow raise → Cmd C (EMG, AF7/AF8)</div>
+  <hr class="leg-sep">
+  <div class="leg-double-wink">●● Double wink → Cmd D</div>
+  <div class="leg-double-jaw">●● Double jaw → Cmd E</div>
+  <div class="leg-combo-wj">●● Wink + Jaw → Cmd F</div>
+  <div style="opacity:0.5;margin-top:4px">keys: Shift+1–6</div>
 </div>
 
 <!-- Signal HUD (top-right) -->
@@ -217,6 +241,7 @@
   <canvas id="fx-canvas"></canvas>
 
   <div id="hud-center">
+    <span id="combo-badge">COMBO</span>
     <span id="text-label">EEG · AF7 / AF8</span>
     <span id="text-main">COMMAND</span>
     <span id="text-sub">detail</span>
@@ -619,6 +644,7 @@ function setActiveDots(channels) {
 
 // ── Command profiles ──────────────────────────────────────────────────────────
 const COMMANDS = {
+  // ── Single commands ──
   wink: {
     hue: 190, accent: '#00eaff', glow: '#00aaff', accentDim: '#00eaff44',
     label: 'EOG · AF7 / AF8',
@@ -626,6 +652,7 @@ const COMMANDS = {
     sub:   'unilateral ocular · asymmetric frontal burst',
     channels: ['AF7','AF8'],
     conf: 92, lat: 10, pow: 38,
+    combo: false,
   },
   jaw_clench: {
     hue: 14, accent: '#ff5e3a', glow: '#ff8a3a', accentDim: '#ff5e3a44',
@@ -634,6 +661,7 @@ const COMMANDS = {
     sub:   'electromyography · masseter burst',
     channels: ['TP9','TP10'],
     conf: 91, lat: 12, pow: 68,
+    combo: false,
   },
   eyebrow_raise: {
     hue: 110, accent: '#7cff6b', glow: '#9bff6b', accentDim: '#7cff6b44',
@@ -642,6 +670,35 @@ const COMMANDS = {
     sub:   'frontalis burst · facial muscle',
     channels: ['AF7','AF8'],
     conf: 83, lat: 22, pow: 35,
+    combo: false,
+  },
+  // ── Combo commands ──
+  double_wink: {
+    hue: 300, accent: '#ff80ff', glow: '#dd44ff', accentDim: '#ff80ff44',
+    label: 'COMBO · AF7 / AF8',
+    main:  'DOUBLE WINK',
+    sub:   'rapid bilateral ocular · sequential burst',
+    channels: ['AF7','AF8'],
+    conf: 88, lat: 14, pow: 42,
+    combo: true,
+  },
+  double_jaw: {
+    hue: 35, accent: '#ffb347', glow: '#ff8c00', accentDim: '#ffb34744',
+    label: 'COMBO · TP9 / TP10',
+    main:  'DOUBLE JAW',
+    sub:   'sequential masseter · dual EMG burst',
+    channels: ['TP9','TP10'],
+    conf: 87, lat: 16, pow: 72,
+    combo: true,
+  },
+  combo_wink_jaw: {
+    hue: 52, accent: '#ffe066', glow: '#ffc200', accentDim: '#ffe06644',
+    label: 'COMBO · AF7+AF8 / TP9+TP10',
+    main:  'WINK + JAW',
+    sub:   'cross-modal sequence · frontal + temporal',
+    channels: ['AF7','AF8','TP9','TP10'],
+    conf: 85, lat: 18, pow: 55,
+    combo: true,
   },
 };
 
@@ -652,6 +709,7 @@ const root       = document.documentElement;
 const elLabel    = document.getElementById('text-label');
 const elMain     = document.getElementById('text-main');
 const elSub      = document.getElementById('text-sub');
+const elComboBadge = document.getElementById('combo-badge');
 let hideTimer = null;
 let fadeTimer = null;
 
@@ -666,6 +724,14 @@ function triggerOverlay(commandKey) {
   elMain.textContent  = cmd.main;
   elSub.textContent   = cmd.sub;
 
+  // Combo badge — tampil hanya untuk combo commands
+  if (cmd.combo) {
+    elComboBadge.textContent = '⚡ COMBO SEQUENCE';
+    elComboBadge.classList.add('show');
+  } else {
+    elComboBadge.classList.remove('show');
+  }
+
   // randomise readout values slightly for realism
   const jitter = n => n + Math.round((Math.random() - 0.5) * 6);
   animateReadout(jitter(cmd.conf), jitter(cmd.lat), jitter(cmd.pow));
@@ -679,6 +745,8 @@ function triggerOverlay(commandKey) {
   sigHud.style.transform = 'translateX(0)';
   startFx(cmd.hue, cmd.channels);
 
+  // Combo hold lebih lama (4s) supaya teks sempat dibaca
+  const holdMs = cmd.combo ? 4000 : 3000;
   hideTimer = setTimeout(() => {
     stopFx();
     overlay.classList.add('fadeout');
@@ -686,22 +754,26 @@ function triggerOverlay(commandKey) {
     sigHud.style.opacity    = '0';
     fadeTimer = setTimeout(() => {
       overlay.classList.remove('active', 'fadeout');
+      elComboBadge.classList.remove('show');
       sigHud.style.transition = '';
       sigHud.style.opacity    = '0';
       sigHud.style.transform  = 'translateX(8px)';
     }, 1300);
-  }, 3000);
+  }, holdMs);
 }
 
 // ── Socket.IO ─────────────────────────────────────────────────────────────────
 const socket = io();
-socket.on('connect',       () => console.log('[overlay] connected'));
-socket.on('disconnect',    () => console.log('[overlay] disconnected'));
-socket.on('wink',          () => triggerOverlay('wink'));
-socket.on('jaw_clench',    () => triggerOverlay('jaw_clench'));
-socket.on('eyebrow_raise', () => triggerOverlay('eyebrow_raise'));
+socket.on('connect',        () => console.log('[overlay] connected'));
+socket.on('disconnect',     () => console.log('[overlay] disconnected'));
+socket.on('wink',           () => triggerOverlay('wink'));
+socket.on('jaw_clench',     () => triggerOverlay('jaw_clench'));
+socket.on('eyebrow_raise',  () => triggerOverlay('eyebrow_raise'));
+socket.on('double_wink',    () => triggerOverlay('double_wink'));
+socket.on('double_jaw',     () => triggerOverlay('double_jaw'));
+socket.on('combo_wink_jaw', () => triggerOverlay('combo_wink_jaw'));
 
-// Dev keys: Shift+1/2/3
+// Dev keys: Shift+1 … Shift+6
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const tag = (e.target && e.target.tagName) || '';
@@ -710,6 +782,9 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Digit1') triggerOverlay('wink');
   if (e.code === 'Digit2') triggerOverlay('jaw_clench');
   if (e.code === 'Digit3') triggerOverlay('eyebrow_raise');
+  if (e.code === 'Digit4') triggerOverlay('double_wink');
+  if (e.code === 'Digit5') triggerOverlay('double_jaw');
+  if (e.code === 'Digit6') triggerOverlay('combo_wink_jaw');
 });
 </script>
 </body>
