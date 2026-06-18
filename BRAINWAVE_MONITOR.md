@@ -18,7 +18,7 @@ Muse 2 (via muselsl + pylsl) / Simulator
         │           obs_connector.py  ← OBS WebSocket v5 scene switching
         │
   templates/index.html         ← Web UI "BRAINWAVE MONITOR" (OBS overlay)
-  templates/overlay_mental_command.html ← 3-command mental command overlay (/overlay/mental-command)
+  templates/overlay_mental_command.html ← 4-command mental command overlay (/overlay/mental-command)
 ```
 
 ## EEG Bands
@@ -77,7 +77,7 @@ Open browser: **http://localhost:8765**
 
 ## Mental Command Detection
 
-Three active commands are detected in real-time, each using distinct signal dimensions to avoid cross-triggering.
+Four active commands are detected in real-time, each using distinct signal dimensions to avoid cross-triggering.
 
 ### Command A — Wink (`on_wink`)
 
@@ -96,14 +96,31 @@ Wink left → AF7 dominates. Wink right → AF8 dominates. The `_wink_unilateral
 
 ```
 Channel    : TP9 (ch0) and TP10 (ch3)
-Filter     : full band (broadband EMG range)
+Filter     : 20–100Hz bandpass (Butterworth order 4)
+Envelope   : RMS over the last ~300ms of the filtered tail, converted to a
+             ptp-equivalent scale (×2√2) — NOT ptp over the full 2s window
 Condition  : max(TP9, TP10) > thr_jaw (adaptive, default 520µV, clamp 300–700µV)
-Sustained  : ≥ 1 tick (masseter EMG is highly impulsive — peak is typically 1 tick)
+Edge       : rising-edge triggered (clench start), reported to GestureComposer
+Release    : full_max < thr_jaw × 0.70 → jaw considered released
 Guard      : NOT eyebrow_zone AND NOT (frontal_active AND bilateral_eff)
 Cooldown   : 4 seconds
 ```
 
 Masseter EMG is strong and confined to temporal channels — completely separate from frontal (AF7/AF8). Neck/SCM muscle (head turn) also activates TP9/TP10 but cannot be reliably separated by symmetry ratio alone (strong jaw clench is also bilateral). The 4-second cooldown is the primary discriminator: jaw clench is a brief impulse, head turns are sustained but only fire once then lock out.
+
+**Why RMS over a short tail, not ptp over the full window**: the 2-second analysis window (`eeg_win`) is needed elsewhere for spectral resolution, but measuring peak-to-peak envelope over the *entire* window meant a single clench spike kept the envelope elevated for up to 2 seconds after the jaw was actually released (the spike just hadn't scrolled out of the window yet). This made single-jaw-clench feel sluggish (release detection lagged ~2s) and broke double jaw clench entirely — the second clench landed while the detector still thought the jaw was clenched from the first, so the rising edge was never counted. Measuring RMS over just the most recent ~300ms tracks the real-time muscle state instead.
+
+### Command D — Double Jaw Clench (`on_double_jaw`)
+
+```
+Detector   : same Jaw Clench detector as Command B (TP9/TP10 EMG envelope)
+Composer   : GestureComposer — edge-triggered counting, not a separate detector
+Decide delay: 1.0 second, restarted on every jaw RELEASE (not on clench start)
+Outcome    : 1 clench in the window → single jaw_clench
+             2+ clenches in the window → double_jaw
+```
+
+Every jaw clench rising edge increments a counter in `GestureComposer` and cancels any pending decide-timer (a held clench shouldn't expire mid-clench). The decide-timer is (re)started only on **release** — so however long a clench is held, the "wait for a second clench" window is measured from when the jaw actually relaxes, not from when it tensed. If no second clench edge arrives within 1.0s of release, the composer fires `on_jaw_clench` (single); if a second edge arrives in time, it fires `on_double_jaw` instead. This is also why a single jaw clench has a perceived ~1.0s delay before the overlay fires — that's the window during which a second clench would still count as a double.
 
 ### Command C — Eyebrow Raise (`on_eyebrow_raise`)
 
@@ -145,21 +162,23 @@ Additional cross-fire guards (learned from real-world testing):
 
 ### Design Principle
 
-All three commands use fundamentally different signal dimensions:
+All commands use fundamentally different signal dimensions:
 - **Wink** → left-right *asymmetry* on frontal channels (one side active, other silent)
 - **Jaw clench** → dedicated *temporal* channels (TP9/TP10), completely separate electrodes
 - **Eyebrow raise** → bilateral frontal activation (both AF7 and AF8 rise together)
+- **Double jaw clench** → same channels as jaw clench, distinguished purely by *edge count within a timing window* (`GestureComposer`), not a different signal dimension
 
 The weak-channel boundary (10–300µV) is the key separator between wink and eyebrow: if both sides exceed `thr_eyebrow`, it's bilateral (eyebrow); if only one side is strong with the other below 300µV, it's unilateral (wink). Observed accuracy: ~90% in real-world use.
 
 ### Overlay FX
 
-**`/overlay/mental-command`** — 3-command overlay. Each command has its own color:
+**`/overlay/mental-command`** — 4-command overlay. Each command has its own color:
 - Command A (Wink): cyan
 - Command B (Jaw Clench): orange  
 - Command C (Eyebrow Raise): green
+- Command D (Double Jaw Clench): amber, with a "COMBO SEQUENCE" badge and longer 4s hold
 
-Dev test: **Shift+1 / Shift+2 / Shift+3**. Auto-hides after 2.8 seconds.
+Dev test: **Shift+1 / Shift+2 / Shift+3 / Shift+4**. Single commands auto-hide after 2.8 seconds; double jaw holds for 4 seconds.
 
 ## OBS Scene Switching
 
@@ -170,6 +189,7 @@ Mental commands trigger OBS scene changes via WebSocket v5 (`obs_connector.py`).
 | Wink | Scene 1 (2 Views Without Top) |
 | Jaw Clench | Scene 2 (3 Views) |
 | Eyebrow Raise | Scene 3 (2 Views Without Front) |
+| Double Jaw Clench | not mapped in `DEFAULT_SCENE_MAP` yet — emits `double_jaw` event but no scene switch |
 
 Scene names can be changed in `obs_connector.py` → `DEFAULT_SCENE_MAP`.
 
@@ -202,6 +222,7 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - `wink` → Scene 1 by brain signal
 - `jaw_clench` → Scene 2 by brain signal
 - `eyebrow_raise` → Scene 3 by brain signal
+- `double_jaw` → no scene switch yet (not in `DEFAULT_SCENE_MAP`), but does trigger the overlay FX at `/overlay/mental-command`
 
 Compatible with **OBS Browser Source** (stream overlay).
 
