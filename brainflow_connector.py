@@ -83,26 +83,21 @@ def scan_muse_devices(timeout: float = 5.0) -> list:
 
 class GestureComposer:
     """
-    Lapisan di atas 3 detector dasar (wink, jaw_clench, eyebrow_raise) yang
-    mendeteksi gesture kombinasi dengan EDGE-TRIGGERED COUNTING.
+    Layer di atas detector jaw_clench yang mendeteksi double_jaw (2× clench
+    dalam satu window) dengan EDGE-TRIGGERED COUNTING.
 
-    Combo yang didukung:
-      double_wink      — 2× wink dalam window
-      double_jaw       — 2× clench dalam window
-      combo_wink_jaw   — wink + jaw (urutan bebas) dalam window
+    Wink di-fire langsung dari detector (lihat MuseConnector.on_wink), tidak
+    lewat composer — composer ini fokus murni pada jaw counting.
 
     Cara kerja (edge counting):
-      Detector mengirim 1 event per RISING EDGE (saat gesture mulai), bukan per
+      Detector mengirim 1 event per RISING EDGE (saat clench mulai), bukan per
       tick. Durasi gesture (mis. clench ditahan lama) tidak relevan.
 
       Setiap event men-start/restart timer DECIDE_DELAY. Selama timer berjalan,
       event berikutnya menambah hitungan. Saat timer expire (tidak ada event
       baru dalam DECIDE_DELAY detik), composer memutuskan:
-        - 1 wink           → single wink
-        - 2+ wink          → double wink
         - 1 jaw            → single jaw clench
         - 2+ jaw           → double jaw
-        - wink + jaw mix   → combo wink+jaw
       Single terasa delay DECIDE_DELAY ms (waktu nunggu kemungkinan event kedua).
     """
 
@@ -111,32 +106,16 @@ class GestureComposer:
                           # saat clench mulai), durasi clench tidak relevan.
                           # Single jaw fire ~1.0s setelah rahang dilepas.
 
-    # Feature flags — combo yang dinonaktifkan akan fall-through ke single.
-    # FOKUS sekarang: hanya double_jaw. Double wink & combo wink+jaw dimatikan
-    # supaya tidak mengganggu single wink (mis. 2 wink beruntun tetap dianggap
-    # 2 single wink, bukan double).
-    ENABLE_DOUBLE_JAW     = True
-    ENABLE_DOUBLE_WINK    = False
-    ENABLE_COMBO_WINK_JAW = False
+    ENABLE_DOUBLE_JAW = True
 
     def __init__(self):
-        self.on_wink:           Optional[Callable] = None
-        self.on_jaw_clench:     Optional[Callable] = None
-        self.on_double_wink:    Optional[Callable] = None
-        self.on_double_jaw:     Optional[Callable] = None
-        self.on_combo_wink_jaw: Optional[Callable] = None
+        self.on_jaw_clench: Optional[Callable] = None
+        self.on_double_jaw: Optional[Callable] = None
 
-        self._wink_count: int = 0
         self._jaw_count:  int = 0
         self._timer: Optional[threading.Timer] = None
 
     # ── public notify methods (dipanggil dari detector) ───────────────────
-
-    def notify_wink(self, t: float) -> bool:
-        """Dipanggil 1× per wink edge. Selalu return True (composer yang fire)."""
-        self._wink_count += 1
-        self._restart_timer()
-        return True
 
     def notify_jaw(self, t: float) -> bool:
         """
@@ -172,38 +151,17 @@ class GestureComposer:
         self._timer.start()
 
     def _decide(self):
-        """Timer expire → putuskan gesture berdasarkan hitungan event.
+        """Timer expire → putuskan single/double jaw berdasarkan hitungan event."""
+        j = self._jaw_count
+        self._jaw_count = 0
+        self._timer     = None
 
-        Combo yang dinonaktifkan (ENABLE_* = False) fall-through: event-nya
-        diperlakukan sebagai single biasa, bukan ditelan.
-        """
-        w, j = self._wink_count, self._jaw_count
-        self._wink_count = 0
-        self._jaw_count  = 0
-        self._timer      = None
-
-        # 1) Combo wink+jaw (jika aktif & ada campuran wink+jaw)
-        if self.ENABLE_COMBO_WINK_JAW and w >= 1 and j >= 1:
-            print(f"🤜  Combo wink+jaw FIRED (w={w} j={j})")
-            self._fire(self.on_combo_wink_jaw, "on_combo_wink_jaw")
-            return
-
-        # 2) Jaw: double (jika aktif & 2+) atau single
         if j >= 2 and self.ENABLE_DOUBLE_JAW:
             print(f"🦷🦷  Double jaw FIRED (j={j})")
             self._fire(self.on_double_jaw, "on_double_jaw")
         elif j >= 1:
-            # double_jaw nonaktif atau hanya 1 clench → single
             print(f"🦷  Jaw clench FIRED (single, j={j})")
             self._fire(self.on_jaw_clench, "on_jaw_clench")
-
-        # 3) Wink: double (jika aktif & 2+) atau single
-        if w >= 2 and self.ENABLE_DOUBLE_WINK:
-            print(f"👀  Double wink FIRED (w={w})")
-            self._fire(self.on_double_wink, "on_double_wink")
-        elif w >= 1:
-            print(f"😉  Wink FIRED (single, w={w})")
-            self._fire(self.on_wink, "on_wink")
 
     @staticmethod
     def _fire(cb: Optional[Callable], name: str):
@@ -217,8 +175,7 @@ class GestureComposer:
         if self._timer:
             self._timer.cancel()
             self._timer = None
-        self._wink_count = 0
-        self._jaw_count  = 0
+        self._jaw_count = 0
 
 
 class MuseConnector:
@@ -280,10 +237,10 @@ class MuseConnector:
         self._relax_streak: int = 0         # tick BERTURUT-TURUT dgn alpha_ratio > threshold (sustained closure)
         self._relax_alpha_hist: list = []   # buffer raw frontal alpha power (uV^2) untuk baseline
 
-        # ── Gesture combo composer ────────────────────────────────────────
-        # Wrap 3 detector dasar → deteksi pola sekuensial berbasis timing.
-        # Callback on_double_wink / on_double_jaw / on_combo_wink_jaw
-        # di-assign dari luar (eeg_server.py), seperti on_wink dst.
+        # ── Gesture composer: double_jaw detection ─────────────────────────
+        # Wrap jaw_clench detector → bedakan single vs double clench
+        # berdasarkan timing. Callback on_jaw_clench / on_double_jaw
+        # di-assign dari luar (eeg_server.py).
         self.composer = GestureComposer()
 
         # ── Adaptive threshold per-sesi ───────────────────────────────────
@@ -652,6 +609,16 @@ class MuseConnector:
                 # clench bersamaan. Jaw clench kuat menjalar ke AF7/AF8 dan bisa
                 # disalahartikan sebagai eyebrow bilateral — maka eyebrow harus
                 # menahan diri saat temporal EMG tinggi (jelas jaw, bukan eyebrow).
+                # PENTING: ptp dihitung hanya dari potongan TERBARU (~300ms), bukan
+                # seluruh window 2s. eeg_win punya panjang 2s (dibutuhkan untuk
+                # band-power/Welch di tempat lain) — kalau ptp diukur di seluruh
+                # window itu, satu spike clench akan membuat _full_max tetap tinggi
+                # sampai ~2 DETIK setelah rahang dilepas (spike masih ada di window).
+                # Akibatnya: release terdeteksi sangat lambat (menambah delay single
+                # jaw jauh di atas DECIDE_DELAY), dan clench kedua pada double-jaw
+                # sering jatuh SAAT _jaw_released masih macet False dari clench
+                # pertama → rise kedua tidak terhitung → selalu jatuh ke single.
+                _ENVELOPE_TAIL = SAMPLE_RATE // 3   # ~300ms terakhir
                 _tp_full = {9: 0.0, 10: 0.0}   # 20-100Hz — total EMG untuk jaw
                 for ch, key in ((0, 9), (3, 10)):
                     if ch_quality[ch] < 0.25:
@@ -660,7 +627,7 @@ class MuseConnector:
                     DataFilter.detrend(_td, DetrendOperations.CONSTANT.value)
                     DataFilter.perform_bandpass(_td, SAMPLE_RATE, 20.0, 100.0, 4,
                         FilterTypes.BUTTERWORTH.value, 0)
-                    _tp_full[key] = round(float(np.ptp(_td)), 1)
+                    _tp_full[key] = round(float(np.ptp(_td[-_ENVELOPE_TAIL:])), 1)
                 _full_max = max(_tp_full[9], _tp_full[10])
 
                 # ── Eyebrow raise detection ────────────────────────────────────
@@ -798,15 +765,12 @@ class MuseConnector:
                           f"during_eyebrow={_during_eyebrow} after_eyebrow={_after_eyebrow} "
                           f"during_jaw={_during_jaw} after_jaw={_after_jaw}")
 
-                # Saat composer sedang menghitung event (jaw/wink count > 0),
-                # izinkan wink meski _after_jaw masih aktif — ini "wink" penutup combo.
-                _composer_counting = (self.composer._wink_count > 0 or self.composer._jaw_count > 0)
                 _wink_now = (not _warmup
                              and _wink_strong and _wink_asymm and _wink_unilateral
                              and not _bilateral
                              and not _during_eyebrow and not _after_eyebrow
                              and not _during_jaw
-                             and (not _after_jaw or _composer_counting)
+                             and not _after_jaw
                              and _both_ch_valid)
                 if _wink_now:
                     self._wink_streak += 1
@@ -820,18 +784,19 @@ class MuseConnector:
                 _cmd_diag["wink_af8"]   = round(_wink_af8, 1)
                 _cmd_diag["wink_ratio"] = round(_wink_ratio, 2)
 
-                # Cooldown wink:
-                #   - Composer sedang menghitung event: 0.30s (untuk double wink cepat)
-                #   - Normal idle: 1.5s (cukup untuk reset antar wink terpisah)
-                _wink_cd = 0.30 if _composer_counting else 1.5
+                # Cooldown wink: 1.5s, cukup untuk reset antar wink terpisah.
                 if (self._wink_streak == 1 and
-                        _now - self._wink_cooldown > _wink_cd):
+                        _now - self._wink_cooldown > 1.5):
                     self._wink_cooldown = _now
                     self._wink_streak   = 0
                     _cmd_diag["cmd_fired"] = "wink"
-                    print(f"😉  Wink edge ({_wink_eye}) → composer "
-                          f"AF7={_wink_af7:.0f}µV AF8={_wink_af8:.0f}µV ratio={_wink_ratio:.1f}")
-                    self.composer.notify_wink(_now)
+                    print(f"😉  Wink edge ({_wink_eye}) — full={_wink_af7:.0f}/{_wink_af8:.0f}µV "
+                          f"ratio={_wink_ratio:.1f}")
+                    if self.on_wink:
+                        try:
+                            self.on_wink()
+                        except Exception as e:
+                            print(f"⚠️  on_wink error: {e}")
 
                 # ── 2) Jaw clench ─────────────────────────────────────────────
                 # Masseter EMG kuat di TP9/TP10 (>520µV).

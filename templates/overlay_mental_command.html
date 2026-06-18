@@ -183,9 +183,7 @@
   .leg-jaw        { color: #ff5e3a; }
   .leg-relax      { color: #7cff6b; }
   .leg-sep        { color: #ffffff33; margin: 2px 0; border: none; border-top: 1px solid #ffffff18; }
-  .leg-double-wink { color: #ff80ff; }
   .leg-double-jaw  { color: #ffb347; }
-  .leg-combo-wj    { color: #ffe066; }
 
   /* ── Combo badge (shown inside HUD for combo commands) ── */
   #combo-badge {
@@ -223,10 +221,7 @@
   <div class="leg-jaw">● Jaw clench → Cmd B (EMG, TP9/TP10)</div>
   <div class="leg-relax">● Eyebrow raise → Cmd C (EMG, AF7/AF8)</div>
   <hr class="leg-sep">
-  <div class="leg-double-wink">●● Double wink → Cmd D</div>
-  <div class="leg-double-jaw">●● Double jaw → Cmd E</div>
-  <div class="leg-combo-wj">●● Wink + Jaw → Cmd F</div>
-  <div style="opacity:0.5;margin-top:4px">keys: Shift+1–6</div>
+  <div class="leg-double-jaw">●● Double jaw → Cmd D</div>
 </div>
 
 <!-- Signal HUD (top-right) -->
@@ -673,15 +668,6 @@ const COMMANDS = {
     combo: false,
   },
   // ── Combo commands ──
-  double_wink: {
-    hue: 300, accent: '#ff80ff', glow: '#dd44ff', accentDim: '#ff80ff44',
-    label: 'COMBO · AF7 / AF8',
-    main:  'DOUBLE WINK',
-    sub:   'rapid bilateral ocular · sequential burst',
-    channels: ['AF7','AF8'],
-    conf: 88, lat: 14, pow: 42,
-    combo: true,
-  },
   double_jaw: {
     hue: 35, accent: '#ffb347', glow: '#ff8c00', accentDim: '#ffb34744',
     label: 'COMBO · TP9 / TP10',
@@ -689,15 +675,6 @@ const COMMANDS = {
     sub:   'sequential masseter · dual EMG burst',
     channels: ['TP9','TP10'],
     conf: 87, lat: 16, pow: 72,
-    combo: true,
-  },
-  combo_wink_jaw: {
-    hue: 52, accent: '#ffe066', glow: '#ffc200', accentDim: '#ffe06644',
-    label: 'COMBO · AF7+AF8 / TP9+TP10',
-    main:  'WINK + JAW',
-    sub:   'cross-modal sequence · frontal + temporal',
-    channels: ['AF7','AF8','TP9','TP10'],
-    conf: 85, lat: 18, pow: 55,
     combo: true,
   },
 };
@@ -769,11 +746,9 @@ socket.on('disconnect',     () => console.log('[overlay] disconnected'));
 socket.on('wink',           () => triggerOverlay('wink'));
 socket.on('jaw_clench',     () => triggerOverlay('jaw_clench'));
 socket.on('eyebrow_raise',  () => triggerOverlay('eyebrow_raise'));
-socket.on('double_wink',    () => triggerOverlay('double_wink'));
 socket.on('double_jaw',     () => triggerOverlay('double_jaw'));
-socket.on('combo_wink_jaw', () => triggerOverlay('combo_wink_jaw'));
 
-// Dev keys: Shift+1 … Shift+6
+// Dev keys: Shift+1 … Shift+4
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const tag = (e.target && e.target.tagName) || '';
@@ -782,9 +757,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Digit1') triggerOverlay('wink');
   if (e.code === 'Digit2') triggerOverlay('jaw_clench');
   if (e.code === 'Digit3') triggerOverlay('eyebrow_raise');
-  if (e.code === 'Digit4') triggerOverlay('double_wink');
-  if (e.code === 'Digit5') triggerOverlay('double_jaw');
-  if (e.code === 'Digit6') triggerOverlay('combo_wink_jaw');
+  if (e.code === 'Digit4') triggerOverlay('double_jaw');
 });
 </script>
 </body>
