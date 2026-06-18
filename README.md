@@ -14,7 +14,7 @@ Muse 2 (Bluetooth BLE)
     ↓  auto-reconnect with backoff (3s → 5s → 10s → 15s) on drop
 BrainFlow DataFilter — PSD Welch, band power θ/α/β
     ↓  2-pass EMG rejection (frontal + temporal)
-    ↓  Mental Command detection (3 gestures — see below)
+    ↓  Mental Command detection (4 gestures — see below)
     ↓  Rolling normalization p10–p90 + EMA 0.20
 Mental State Classifier — arousal = 0.50β − 0.30α − 0.20TBR
     ↓  flow_score = frontal_α + frontal_θ − β  (AF7/AF8)
@@ -26,29 +26,34 @@ Brainwave Monitor — FluidSynth GM ch9
     ↓  TENSE: battle drums (95–135 BPM)
 Flask-SocketIO (port 8765)
     ↓  /                        → BrainWave Monitor overlay (OBS Browser Source)
-    ↓  /overlay/mental-command  → Mental Command Playground (3-command demo overlay)
-    ↓  wink / jaw_clench / eyebrow_raise events → full-screen visual FX per command
+    ↓  /overlay/mental-command  → Mental Command Playground (4-command demo overlay)
+    ↓  wink / jaw_clench / eyebrow_raise / double_jaw events → full-screen visual FX per command
 ```
 
 ---
 
 ## Features
 
-### Mental Command Playground — 3 Active Commands
+### Mental Command Playground — 4 Active Commands
 
-Three distinct gestures trigger a full-screen visual FX overlay at `/overlay/mental-command`, each using different electrodes and signal modalities:
+Four distinct gestures trigger a full-screen visual FX overlay at `/overlay/mental-command`, each using different electrodes and signal modalities:
 
 | Command | Gesture | Channel | Detection Logic |
 |---|---|---|---|
 | **A — Wink** | Kedip satu mata | AF7 / AF8 | Strong side >thr_wink (adaptive, default 800µV), asymmetry ratio >2.0×, weak side 10–300µV (unilateral EOG) |
-| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG p2p >thr_jaw (adaptive, default 520µV), ≥1 tick (impulsive), cooldown 4s |
+| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG envelope (RMS, ~300ms tail) >thr_jaw (adaptive, default 520µV), rising-edge triggered, fires ~1.0s after release (composer decide window) |
 | **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both channels valid + bilateral (both >thr_eyebrow adaptive, ratio <3.0), sustained ≥3 ticks (~750ms) |
+| **D — Double Jaw Clench** | Katupkan rahang 2× cepat berurutan | TP9 / TP10 | Same detector as Jaw Clench, but counts 2 rising edges within the 1.0s composer decide window (`GestureComposer`) instead of 1 |
 
-**Key design insight**: all three use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_last_cmd_time`, 1.5s) plus per-pair cooldown guards (up to 5s) prevent cross-triggering. Observed accuracy: ~90%.
+**Key design insight**: all gestures use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_last_cmd_time`, 1.5s) plus per-pair cooldown guards (up to 5s) prevent cross-triggering. Observed accuracy: ~90%.
+
+**Jaw clench envelope (RMS, short tail)**: the temporal EMG envelope (`_full_max`) is computed from the RMS of only the last ~300ms of the filtered signal, not the full 2s analysis window. Measuring it over the full window made a single clench spike keep the envelope elevated for up to 2 seconds after the jaw was actually released (the spike just sat inside the rolling window), which delayed single-jaw firing well past the intended 1.0s and made the second clench of a double-jaw attempt land while the detector still thought the jaw was clenched — collapsing every double jaw into a single. The short RMS tail tracks the real-time muscle state instead.
+
+**Double jaw composer**: jaw clench rising edges are reported to `GestureComposer`, which restarts a 1.0s decide-timer on every release. If a second clench edge arrives before the timer expires, it fires `double_jaw`; otherwise it falls back to a single `jaw_clench`. This is why single jaw clench has a ~1.0s perceived delay — it's the window during which a second clench would still count as a double.
 
 **Adaptive EMG threshold**: during the first ~15 seconds of each session, the connector measures resting EMG noise on frontal (AF7/AF8) and temporal (TP9/TP10) channels. Thresholds are computed as `median_baseline × multiplier` and clamped to a safe range, replacing the hardcoded defaults for the rest of the session. Printed to terminal as `✅ EMG calibration done`.
 
-To test without a Muse: open `/overlay/mental-command` and press **Shift+1**, **Shift+2**, **Shift+3**.
+To test without a Muse: open `/overlay/mental-command` and press **Shift+1**, **Shift+2**, **Shift+3**, **Shift+4**.
 
 ### Mental State Detection
 
@@ -149,9 +154,9 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 - **Reconnecting dot** — orange pulsing dot when auto-reconnect is in progress
 
 **Mental Command Playground** (`http://localhost:8765/overlay/mental-command`):
-- Full-screen command demo overlay with 3 distinct color schemes per command
-- Command A (Wink) — cyan, Command B (Jaw Clench) — orange, Command C (Eyebrow Raise) — green
-- Dev test: **Shift+1 / Shift+2 / Shift+3** to trigger each command without Muse
+- Full-screen command demo overlay with 4 distinct color schemes per command
+- Command A (Wink) — cyan, Command B (Jaw Clench) — orange, Command C (Eyebrow Raise) — green, Command D (Double Jaw Clench) — amber, combo badge
+- Dev test: **Shift+1 / Shift+2 / Shift+3 / Shift+4** to trigger each command without Muse
 
 ---
 
@@ -218,9 +223,10 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | Brainwave Monitor drum engine (FluidSynth) | ✅ |
 | OBS overlay UI (index.html) | ✅ |
 | Eyebrow raise detection + overlay FX | ✅ |
-| Mental Command Playground (3 commands) | ✅ |
+| Mental Command Playground (4 commands) | ✅ |
 | Wink detection (unilateral EOG asymmetry) | ✅ |
-| Jaw clench detection (temporal EMG sustained) | ✅ |
+| Jaw clench detection (temporal EMG, RMS short-tail envelope) | ✅ |
+| Double jaw clench detection (GestureComposer edge counting) | ✅ |
 | OBS scene switching via mental commands | ✅ |
 | Auto-reconnect with backoff | ✅ |
 | ML classifier (SVM/LDA) | 🔲 planned |
