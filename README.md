@@ -42,17 +42,19 @@ Five distinct gestures trigger a full-screen visual FX overlay at `/overlay/ment
 |---|---|---|---|
 | **A1 — Wink Left** | Kedip mata kiri | AF7 dominant | Strong side >thr_wink (adaptive, default 800µV), asymmetry ratio >2.0×, weak side (AF8) 10–300µV, AF7 ≥ AF8 |
 | **A2 — Wink Right** | Kedip mata kanan | AF8 dominant | Same as Wink Left but AF8 > AF7 (`_wink_eye` picks the dominant channel) |
-| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG envelope (RMS, ~300ms tail) >thr_jaw (adaptive, default 520µV), rising-edge triggered, fires ~1.0s after release (composer decide window) |
+| **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG envelope (RMS, ~300ms tail) >thr_jaw (adaptive, default 520µV), rising-edge triggered, fires ~0.6s after release (composer decide window) |
 | **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both channels valid + bilateral (both >thr_eyebrow adaptive, ratio <3.0), sustained ≥3 ticks (~750ms) |
-| **D — Double Jaw Clench** | Katupkan rahang 2× cepat berurutan | TP9 / TP10 | Same detector as Jaw Clench, but counts 2 rising edges within the 1.0s composer decide window (`GestureComposer`) instead of 1 |
+| **D — Double Jaw Clench** | Katupkan rahang 2× cepat berurutan | TP9 / TP10 | Same detector as Jaw Clench, but counts 2 rising edges within the 0.6s composer decide window (`GestureComposer`) instead of 1 — toggles OBS recording start/stop instead of a scene switch |
 
 **Key design insight**: all gestures use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_last_cmd_time`, 1.5s) plus per-pair cooldown guards (up to 5s) prevent cross-triggering. Observed accuracy: ~90%.
 
 **Wink left vs right**: the wink detector already computed which channel dominates (`_wink_eye = "left" if AF7 ≥ AF8 else "right"`) for logging, but originally fired a single generic `on_wink` callback regardless of side. It now dispatches to `on_wink_left` or `on_wink_right` based on `_wink_eye`, so the two sides are independent commands with their own overlay color and OBS scene mapping — no change to the underlying asymmetry detection itself.
 
-**Jaw clench envelope (RMS, short tail)**: the temporal EMG envelope (`_full_max`) is computed from the RMS of only the last ~300ms of the filtered signal, not the full 2s analysis window. Measuring it over the full window made a single clench spike keep the envelope elevated for up to 2 seconds after the jaw was actually released (the spike just sat inside the rolling window), which delayed single-jaw firing well past the intended 1.0s and made the second clench of a double-jaw attempt land while the detector still thought the jaw was clenched — collapsing every double jaw into a single. The short RMS tail tracks the real-time muscle state instead.
+**Jaw clench envelope (RMS, short tail)**: the temporal EMG envelope (`_full_max`) is computed from the RMS of only the last ~300ms of the filtered signal, not the full 2s analysis window. Measuring it over the full window made a single clench spike keep the envelope elevated for up to 2 seconds after the jaw was actually released (the spike just sat inside the rolling window), which delayed single-jaw firing well past the intended decide window and made the second clench of a double-jaw attempt land while the detector still thought the jaw was clenched — collapsing every double jaw into a single. The short RMS tail tracks the real-time muscle state instead.
 
-**Double jaw composer**: jaw clench rising edges are reported to `GestureComposer`, which restarts a 1.0s decide-timer on every release. If a second clench edge arrives before the timer expires, it fires `double_jaw`; otherwise it falls back to a single `jaw_clench`. This is why single jaw clench has a ~1.0s perceived delay — it's the window during which a second clench would still count as a double.
+**Double jaw composer**: jaw clench rising edges are reported to `GestureComposer`, which restarts a 0.6s decide-timer on every release (lowered from an initial 1.0s to make double jaw feel snappier). If a second clench edge arrives before the timer expires, it fires `double_jaw`; otherwise it falls back to a single `jaw_clench`. This is why single jaw clench has a ~0.6s perceived delay — it's the window during which a second clench would still count as a double.
+
+**Double jaw → OBS recording toggle**: unlike the other commands, `double_jaw` doesn't switch an OBS scene. `eeg_server.py`'s `_double_jaw_cb` calls `obs_connector.toggle_record()`, which queries OBS's actual recording state (`get_record_status().output_active`) and calls `start_record()` or `stop_record()` accordingly — so the first double jaw clench starts recording, the next one stops it.
 
 **Adaptive EMG threshold**: during the first ~15 seconds of each session, the connector measures resting EMG noise on frontal (AF7/AF8) and temporal (TP9/TP10) channels. Thresholds are computed as `median_baseline × multiplier` and clamped to a safe range, replacing the hardcoded defaults for the rest of the session. Printed to terminal as `✅ EMG calibration done`.
 
@@ -171,7 +173,7 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 | Signal Processing | BrainFlow DataFilter | PSD Welch, band power computation |
 | Audio Engine | FluidSynth + pyfluidsynth | Drum rendering via GM Soundfont |
 | Web Server | Flask + Flask-SocketIO | WebSocket bridge Python → Browser |
-| OBS Integration | obsws-python | WebSocket v5 scene switching |
+| OBS Integration | obsws-python | WebSocket v5 scene switching + recording start/stop toggle |
 | Overlay UI | HTML/CSS/JS | OBS Browser Source |
 
 **Install dependencies:**
@@ -231,5 +233,6 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | Jaw clench detection (temporal EMG, RMS short-tail envelope) | ✅ |
 | Double jaw clench detection (GestureComposer edge counting) | ✅ |
 | OBS scene switching via mental commands | ✅ |
+| OBS recording start/stop toggle via double jaw clench | ✅ |
 | Auto-reconnect with backoff | ✅ |
 | ML classifier (SVM/LDA) | 🔲 planned |

@@ -116,12 +116,15 @@ Masseter EMG is strong and confined to temporal channels — completely separate
 ```
 Detector   : same Jaw Clench detector as Command B (TP9/TP10 EMG envelope)
 Composer   : GestureComposer — edge-triggered counting, not a separate detector
-Decide delay: 1.0 second, restarted on every jaw RELEASE (not on clench start)
+Decide delay: 0.6 second, restarted on every jaw RELEASE (not on clench start)
 Outcome    : 1 clench in the window → single jaw_clench
              2+ clenches in the window → double_jaw
+Action     : toggles OBS recording (obs_connector.toggle_record()), not a scene switch
 ```
 
-Every jaw clench rising edge increments a counter in `GestureComposer` and cancels any pending decide-timer (a held clench shouldn't expire mid-clench). The decide-timer is (re)started only on **release** — so however long a clench is held, the "wait for a second clench" window is measured from when the jaw actually relaxes, not from when it tensed. If no second clench edge arrives within 1.0s of release, the composer fires `on_jaw_clench` (single); if a second edge arrives in time, it fires `on_double_jaw` instead. This is also why a single jaw clench has a perceived ~1.0s delay before the overlay fires — that's the window during which a second clench would still count as a double.
+Every jaw clench rising edge increments a counter in `GestureComposer` and cancels any pending decide-timer (a held clench shouldn't expire mid-clench). The decide-timer is (re)started only on **release** — so however long a clench is held, the "wait for a second clench" window is measured from when the jaw actually relaxes, not from when it tensed. If no second clench edge arrives within `DECIDE_DELAY` (0.6s) of release, the composer fires `on_jaw_clench` (single); if a second edge arrives in time, it fires `on_double_jaw` instead. This is also why a single jaw clench has a perceived ~0.6s delay before the overlay fires — that's the window during which a second clench would still count as a double. `DECIDE_DELAY` was lowered from an initial 1.0s to make double jaw feel snappier; going much lower starts to outrun how fast a jaw can physically clench-release-clench again.
+
+**Double jaw → OBS recording, not a scene**: `on_double_jaw` is wired to `obs_connector.toggle_record()` in `eeg_server.py`, not `switch_scene()`. `toggle_record()` calls `get_record_status()` on OBS to check the *actual* current recording state (`output_active`), then calls `start_record()` or `stop_record()` accordingly — so it stays correct even if the user also starts/stops recording manually from inside OBS between double-jaw triggers. The first double jaw clench in a session starts recording; the next one stops it.
 
 ### Command C — Eyebrow Raise (`on_eyebrow_raise`)
 
@@ -182,7 +185,7 @@ The weak-channel boundary (10–300µV) is the key separator between wink and ey
 
 Dev test: **Shift+1** through **Shift+5**. Single commands auto-hide after 2.8 seconds; double jaw holds for 4 seconds.
 
-## OBS Scene Switching
+## OBS Scene Switching & Recording Control
 
 Mental commands trigger OBS scene changes via WebSocket v5 (`obs_connector.py`).
 
@@ -192,9 +195,11 @@ Mental commands trigger OBS scene changes via WebSocket v5 (`obs_connector.py`).
 | Wink Right | Scene 1 (2 Views Without Top) — same default as Wink Left, change independently in `DEFAULT_SCENE_MAP` if needed |
 | Jaw Clench | Scene 2 (3 Views) |
 | Eyebrow Raise | Scene 3 (2 Views Without Front) |
-| Double Jaw Clench | not mapped in `DEFAULT_SCENE_MAP` yet — emits `double_jaw` event but no scene switch |
+| Double Jaw Clench | not a scene switch — toggles OBS recording instead (see below) |
 
 Scene names can be changed in `obs_connector.py` → `DEFAULT_SCENE_MAP`.
+
+**Double jaw clench → recording toggle**: `OBSConnector.toggle_record()` checks OBS's actual recording state via `get_record_status().output_active`, then calls `start_record()` or `stop_record()` accordingly. Runs in a background thread (non-blocking), with the same reconnect-on-failure behavior as scene switching. First double jaw clench starts recording, the next stops it — independent of `DEFAULT_SCENE_MAP`.
 
 **Setup:**
 1. OBS → Tools → WebSocket Server Settings → Enable
@@ -226,7 +231,7 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - `wink_right` → Scene 1 by brain signal (same default scene as wink_left, configurable independently)
 - `jaw_clench` → Scene 2 by brain signal
 - `eyebrow_raise` → Scene 3 by brain signal
-- `double_jaw` → no scene switch yet (not in `DEFAULT_SCENE_MAP`), but does trigger the overlay FX at `/overlay/mental-command`
+- `double_jaw` → no scene switch — toggles OBS recording start/stop, and triggers the overlay FX at `/overlay/mental-command`
 
 Compatible with **OBS Browser Source** (stream overlay).
 
