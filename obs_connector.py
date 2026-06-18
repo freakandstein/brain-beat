@@ -47,6 +47,7 @@ class OBSConnector:
 
         self._client = None
         self._lock   = threading.Lock()
+        self._is_recording = False
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -79,6 +80,10 @@ class OBSConnector:
         if not scene:
             return
         threading.Thread(target=self._do_switch, args=(command, scene), daemon=True).start()
+
+    def toggle_record(self):
+        """Toggle recording OBS: belum recording → start, sedang recording → stop. Non-blocking."""
+        threading.Thread(target=self._do_toggle_record, daemon=True).start()
 
     def get_scene_list(self) -> list[str]:
         """Return daftar nama scene dari OBS (untuk debugging/konfigurasi)."""
@@ -118,3 +123,40 @@ class OBSConnector:
                     print(f"🎬  OBS scene → {scene} (setelah reconnect)")
                 except Exception as e2:
                     print(f"⚠️  OBS scene switch tetap gagal: {e2}")
+
+    def _do_toggle_record(self):
+        with self._lock:
+            cl = self._client
+        if cl is None:
+            self.connect()
+            with self._lock:
+                cl = self._client
+        if cl is None:
+            return
+
+        try:
+            self._toggle_record_with_client(cl)
+        except Exception as e:
+            print(f"⚠️  OBS record toggle gagal: {e} — mencoba reconnect...")
+            with self._lock:
+                self._client = None
+            if self.connect():
+                with self._lock:
+                    cl2 = self._client
+                try:
+                    self._toggle_record_with_client(cl2)
+                except Exception as e2:
+                    print(f"⚠️  OBS record toggle tetap gagal: {e2}")
+
+    def _toggle_record_with_client(self, cl):
+        # Tanya status asli ke OBS dulu (bukan asumsi dari _is_recording lokal) —
+        # supaya tetap akurat kalau user juga start/stop manual dari OBS.
+        status = cl.get_record_status()
+        if status.output_active:
+            cl.stop_record()
+            self._is_recording = False
+            print("⏹️  OBS recording STOPPED (trigger: double_jaw)")
+        else:
+            cl.start_record()
+            self._is_recording = True
+            print("⏺️  OBS recording STARTED (trigger: double_jaw)")
