@@ -18,7 +18,7 @@ Muse 2 (via muselsl + pylsl) / Simulator
         │           obs_connector.py  ← OBS WebSocket v5 scene switching
         │
   templates/index.html         ← Web UI "BRAINWAVE MONITOR" (OBS overlay)
-  templates/overlay_mental_command.html ← 4-command mental command overlay (/overlay/mental-command)
+  templates/overlay_mental_command.html ← 5-command mental command overlay (/overlay/mental-command)
 ```
 
 ## EEG Bands
@@ -77,20 +77,21 @@ Open browser: **http://localhost:8765**
 
 ## Mental Command Detection
 
-Four active commands are detected in real-time, each using distinct signal dimensions to avoid cross-triggering.
+Five active commands are detected in real-time, each using distinct signal dimensions to avoid cross-triggering.
 
-### Command A — Wink (`on_wink`)
+### Command A1/A2 — Wink Left / Wink Right (`on_wink_left` / `on_wink_right`)
 
 ```
 Channel      : AF7 (ch1) and AF8 (ch2)
 Condition    : strong side > thr_wink (adaptive, default 800µV, clamp 300–1000µV)
 Asymmetry    : max / min ratio > 2.0                  (one side dominates — unilateral)
 Unilateral   : min(p2p_AF7, p2p_AF8) between 10–300µV (weak side low = truly unilateral)
+Side         : _wink_eye = "left" if p2p_AF7 >= p2p_AF8 else "right"
 Guard        : NOT bilateral_eff, NOT during/after eyebrow zone
 Cooldown     : 3 seconds
 ```
 
-Wink left → AF7 dominates. Wink right → AF8 dominates. The `_wink_unilateral` check (weak channel 10–300µV) is the key separator from eyebrow raise — if both frontal electrodes exceed `thr_eyebrow`, it's treated as eyebrow activity, not a wink. Ratio threshold lowered 3.5 → 2.0 based on real-world data showing genuine wink ratio is typically 1.7–2.2 due to electrode proximity.
+Wink left → AF7 dominates → fires `on_wink_left`. Wink right → AF8 dominates → fires `on_wink_right`. These are two independent commands (separate overlay color, separate OBS scene by default), but they share one detector — the underlying asymmetry/unilateral logic that distinguishes a wink from an eyebrow raise is identical, only the dispatch target differs based on `_wink_eye`. The `_wink_unilateral` check (weak channel 10–300µV) is the key separator from eyebrow raise — if both frontal electrodes exceed `thr_eyebrow`, it's treated as eyebrow activity, not a wink. Ratio threshold lowered 3.5 → 2.0 based on real-world data showing genuine wink ratio is typically 1.7–2.2 due to electrode proximity.
 
 ### Command B — Jaw Clench (`on_jaw_clench`)
 
@@ -149,21 +150,21 @@ Calibration runs for the full 15 seconds regardless of whether commands fire dur
 
 ### Mutual Exclusion (Global Mutex)
 
-All three detectors share a single `_last_cmd_time` timestamp. Once any command fires, a **1.5-second idle window** must pass before any detector can fire again (`_cmd_idle` is checked once per tick before all detectors run).
+All detectors share a single `_last_cmd_time` timestamp. Once any command fires, a **1.5-second idle window** must pass before any detector can fire again (`_cmd_idle` is checked once per tick before all detectors run).
 
 Additional cross-fire guards (learned from real-world testing):
 
 | Guard | Duration | Blocks |
 |---|---|---|
-| `_after_eyebrow` | 5 seconds | Wink detector |
+| `_after_eyebrow` | 5 seconds | Wink detector (both sides) |
 | `_after_wink` | 4 seconds | Eyebrow detector |
 | `_after_jaw` (for eyebrow) | 4 seconds | Eyebrow streak + fire |
-| `_eyebrow_active_until` zone | 1.5s after bilateral activity | Wink and jaw |
+| `_eyebrow_active_until` zone | 1.5s after bilateral activity | Wink (both sides) and jaw |
 
 ### Design Principle
 
 All commands use fundamentally different signal dimensions:
-- **Wink** → left-right *asymmetry* on frontal channels (one side active, other silent)
+- **Wink left/right** → left-right *asymmetry* on frontal channels (one side active, other silent) — the side is just which channel dominates, not a separate signal dimension
 - **Jaw clench** → dedicated *temporal* channels (TP9/TP10), completely separate electrodes
 - **Eyebrow raise** → bilateral frontal activation (both AF7 and AF8 rise together)
 - **Double jaw clench** → same channels as jaw clench, distinguished purely by *edge count within a timing window* (`GestureComposer`), not a different signal dimension
@@ -172,13 +173,14 @@ The weak-channel boundary (10–300µV) is the key separator between wink and ey
 
 ### Overlay FX
 
-**`/overlay/mental-command`** — 4-command overlay. Each command has its own color:
-- Command A (Wink): cyan
+**`/overlay/mental-command`** — 5-command overlay. Each command has its own color:
+- Command A1 (Wink Left): cyan
+- Command A2 (Wink Right): pink
 - Command B (Jaw Clench): orange  
 - Command C (Eyebrow Raise): green
 - Command D (Double Jaw Clench): amber, with a "COMBO SEQUENCE" badge and longer 4s hold
 
-Dev test: **Shift+1 / Shift+2 / Shift+3 / Shift+4**. Single commands auto-hide after 2.8 seconds; double jaw holds for 4 seconds.
+Dev test: **Shift+1** through **Shift+5**. Single commands auto-hide after 2.8 seconds; double jaw holds for 4 seconds.
 
 ## OBS Scene Switching
 
@@ -186,7 +188,8 @@ Mental commands trigger OBS scene changes via WebSocket v5 (`obs_connector.py`).
 
 | Command | Default Scene |
 |---|---|
-| Wink | Scene 1 (2 Views Without Top) |
+| Wink Left | Scene 1 (2 Views Without Top) |
+| Wink Right | Scene 1 (2 Views Without Top) — same default as Wink Left, change independently in `DEFAULT_SCENE_MAP` if needed |
 | Jaw Clench | Scene 2 (3 Views) |
 | Eyebrow Raise | Scene 3 (2 Views Without Front) |
 | Double Jaw Clench | not mapped in `DEFAULT_SCENE_MAP` yet — emits `double_jaw` event but no scene switch |
@@ -219,7 +222,8 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - Auto-reconnect with backoff (3s → 5s → 10s → 15s); UI shows `🔄 Reconnecting...` during retries
 
 **Mental Commands** (socket events → UI trigger):
-- `wink` → Scene 1 by brain signal
+- `wink_left` → Scene 1 by brain signal
+- `wink_right` → Scene 1 by brain signal (same default scene as wink_left, configurable independently)
 - `jaw_clench` → Scene 2 by brain signal
 - `eyebrow_raise` → Scene 3 by brain signal
 - `double_jaw` → no scene switch yet (not in `DEFAULT_SCENE_MAP`), but does trigger the overlay FX at `/overlay/mental-command`
