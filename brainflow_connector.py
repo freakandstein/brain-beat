@@ -102,10 +102,12 @@ class GestureComposer:
       Single terasa delay DECIDE_DELAY ms (waktu nunggu kemungkinan event kedua).
     """
 
-    DECIDE_DELAY = 1.00   # detik — tunggu clench kedua, DIUKUR DARI RELEASE.
+    DECIDE_DELAY = 1.5   # detik — tunggu clench kedua, DIUKUR DARI RELEASE.
                           # Karena timer di-restart saat rahang dilepas (bukan
                           # saat clench mulai), durasi clench tidak relevan.
-                          # Single jaw fire ~1.0s setelah rahang dilepas.
+                          # Single jaw fire ~0.6s setelah rahang dilepas.
+                          # Diturunkan dari 1.0s — double jaw terasa lebih snappy,
+                          # clench kedua tetap harus masuk dalam window ini.
 
     ENABLE_DOUBLE_JAW = True
 
