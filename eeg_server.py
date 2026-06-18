@@ -244,7 +244,9 @@ def main():
         def _double_jaw_cb():
             print("🦷🦷  Double jaw detected — triggering overlay")
             socketio.emit("double_jaw", {})
-            obs_connector.switch_scene("double_jaw")
+            # Belum ada scene mapping untuk double_jaw — dipakai sebagai
+            # hotkey toggle start/stop recording OBS, bukan scene switch.
+            obs_connector.toggle_record()
 
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         muse.on_eyebrow_raise = _eyebrow_cb
