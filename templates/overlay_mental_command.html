@@ -179,7 +179,8 @@
     pointer-events: none;
   }
   #legend b { letter-spacing: 0.15em; color: #ffffffcc; }
-  .leg-blink      { color: #00eaff; }
+  .leg-wink-left  { color: #00eaff; }
+  .leg-wink-right { color: #ff6bd6; }
   .leg-jaw        { color: #ff5e3a; }
   .leg-relax      { color: #7cff6b; }
   .leg-sep        { color: #ffffff33; margin: 2px 0; border: none; border-top: 1px solid #ffffff18; }
@@ -217,11 +218,13 @@
 <!-- Dev legend -->
 <div id="legend">
   <div><b>MENTAL COMMAND PLAYGROUND</b></div>
-  <div class="leg-blink">● Wink → Cmd A (EOG, AF7/AF8)</div>
+  <div class="leg-wink-left">● Wink left → Cmd A1 (EOG, AF7)</div>
+  <div class="leg-wink-right">● Wink right → Cmd A2 (EOG, AF8)</div>
   <div class="leg-jaw">● Jaw clench → Cmd B (EMG, TP9/TP10)</div>
   <div class="leg-relax">● Eyebrow raise → Cmd C (EMG, AF7/AF8)</div>
   <hr class="leg-sep">
   <div class="leg-double-jaw">●● Double jaw → Cmd D</div>
+  <div style="opacity:0.5;margin-top:4px">keys: Shift+1–5</div>
 </div>
 
 <!-- Signal HUD (top-right) -->
@@ -640,12 +643,21 @@ function setActiveDots(channels) {
 // ── Command profiles ──────────────────────────────────────────────────────────
 const COMMANDS = {
   // ── Single commands ──
-  wink: {
+  wink_left: {
     hue: 190, accent: '#00eaff', glow: '#00aaff', accentDim: '#00eaff44',
-    label: 'EOG · AF7 / AF8',
-    main:  'WINK',
-    sub:   'unilateral ocular · asymmetric frontal burst',
-    channels: ['AF7','AF8'],
+    label: 'EOG · AF7',
+    main:  'WINK LEFT',
+    sub:   'unilateral ocular · left frontal burst',
+    channels: ['AF7'],
+    conf: 92, lat: 10, pow: 38,
+    combo: false,
+  },
+  wink_right: {
+    hue: 320, accent: '#ff6bd6', glow: '#ff3ac4', accentDim: '#ff6bd644',
+    label: 'EOG · AF8',
+    main:  'WINK RIGHT',
+    sub:   'unilateral ocular · right frontal burst',
+    channels: ['AF8'],
     conf: 92, lat: 10, pow: 38,
     combo: false,
   },
@@ -743,21 +755,23 @@ function triggerOverlay(commandKey) {
 const socket = io();
 socket.on('connect',        () => console.log('[overlay] connected'));
 socket.on('disconnect',     () => console.log('[overlay] disconnected'));
-socket.on('wink',           () => triggerOverlay('wink'));
+socket.on('wink_left',      () => triggerOverlay('wink_left'));
+socket.on('wink_right',     () => triggerOverlay('wink_right'));
 socket.on('jaw_clench',     () => triggerOverlay('jaw_clench'));
 socket.on('eyebrow_raise',  () => triggerOverlay('eyebrow_raise'));
 socket.on('double_jaw',     () => triggerOverlay('double_jaw'));
 
-// Dev keys: Shift+1 … Shift+4
+// Dev keys: Shift+1 … Shift+5
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
   if (!e.shiftKey) return;
-  if (e.code === 'Digit1') triggerOverlay('wink');
-  if (e.code === 'Digit2') triggerOverlay('jaw_clench');
-  if (e.code === 'Digit3') triggerOverlay('eyebrow_raise');
-  if (e.code === 'Digit4') triggerOverlay('double_jaw');
+  if (e.code === 'Digit1') triggerOverlay('wink_left');
+  if (e.code === 'Digit2') triggerOverlay('wink_right');
+  if (e.code === 'Digit3') triggerOverlay('jaw_clench');
+  if (e.code === 'Digit4') triggerOverlay('eyebrow_raise');
+  if (e.code === 'Digit5') triggerOverlay('double_jaw');
 });
 </script>
 </body>

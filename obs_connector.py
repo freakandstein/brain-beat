@@ -8,7 +8,7 @@ Penggunaan:
     from obs_connector import OBSConnector
     obs = OBSConnector(password="xxx")
     obs.connect()
-    obs.switch_scene("wink")       # → scene yang di-map ke "wink"
+    obs.switch_scene("wink_left")  # → scene yang di-map ke "wink_left"
 """
 
 import threading
@@ -27,7 +27,8 @@ class OBSConnector:
     """
 
     DEFAULT_SCENE_MAP = {
-        "wink":          "Scene 1 (2 Views Without Top)",
+        "wink_left":     "Scene 1 (2 Views Without Top)",
+        "wink_right":    "Scene 1 (2 Views Without Top)",
         "jaw_clench":    "Scene 2 (3 Views)",
         "eyebrow_raise": "Scene 3 (2 Views Without Front)",
     }
