@@ -86,7 +86,8 @@ class GestureComposer:
     Layer di atas detector jaw_clench yang mendeteksi double_jaw (2× clench
     dalam satu window) dengan EDGE-TRIGGERED COUNTING.
 
-    Wink di-fire langsung dari detector (lihat MuseConnector.on_wink), tidak
+    Wink di-fire langsung dari detector (lihat MuseConnector.on_wink_left /
+    on_wink_right), tidak
     lewat composer — composer ini fokus murni pada jaw counting.
 
     Cara kerja (edge counting):
@@ -221,7 +222,8 @@ class MuseConnector:
         # Tongue press (EMG 15-40Hz sedang TP9/TP10), Jaw clench (EMG broadband
         # kuat TP9/TP10), dan Eyebrow raise (EMG frontal bilateral AF7/AF8).
         # Tongue dan jaw pakai electrode yang sama tapi dibedakan amplitudo & band.
-        self.on_wink: Optional[callable] = None
+        self.on_wink_left: Optional[callable] = None
+        self.on_wink_right: Optional[callable] = None
         self.on_jaw_clench: Optional[callable] = None
         self.on_eyes_closed_relax: Optional[callable] = None
         self.on_double_blink: Optional[callable] = None   # deprecated
@@ -789,14 +791,15 @@ class MuseConnector:
                         _now - self._wink_cooldown > 1.5):
                     self._wink_cooldown = _now
                     self._wink_streak   = 0
-                    _cmd_diag["cmd_fired"] = "wink"
+                    _cmd_diag["cmd_fired"] = f"wink_{_wink_eye}"
                     print(f"😉  Wink edge ({_wink_eye}) — full={_wink_af7:.0f}/{_wink_af8:.0f}µV "
                           f"ratio={_wink_ratio:.1f}")
-                    if self.on_wink:
+                    _wink_cb = self.on_wink_left if _wink_eye == "left" else self.on_wink_right
+                    if _wink_cb:
                         try:
-                            self.on_wink()
+                            _wink_cb()
                         except Exception as e:
-                            print(f"⚠️  on_wink error: {e}")
+                            print(f"⚠️  on_wink_{_wink_eye} error: {e}")
 
                 # ── 2) Jaw clench ─────────────────────────────────────────────
                 # Masseter EMG kuat di TP9/TP10 (>520µV).
