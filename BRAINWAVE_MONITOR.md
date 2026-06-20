@@ -85,13 +85,15 @@ Five active commands are detected in real-time, each using distinct signal dimen
 Channel      : AF7 (ch1) and AF8 (ch2)
 Condition    : strong side > thr_wink (adaptive, default 800µV, clamp 300–1000µV)
 Asymmetry    : max / min ratio > 2.0                  (one side dominates — unilateral)
-Unilateral   : min(p2p_AF7, p2p_AF8) between 10–300µV (weak side low = truly unilateral)
+Unilateral   : min(p2p_AF7, p2p_AF8) between 1–400µV  (weak side low = truly unilateral)
 Side         : _wink_eye = "left" if p2p_AF7 >= p2p_AF8 else "right"
 Guard        : NOT bilateral_eff, NOT during/after eyebrow zone
 Cooldown     : 3 seconds
 ```
 
-Wink left → AF7 dominates → fires `on_wink_left`. Wink right → AF8 dominates → fires `on_wink_right`. These are two independent commands (separate overlay color, separate OBS scene by default), but they share one detector — the underlying asymmetry/unilateral logic that distinguishes a wink from an eyebrow raise is identical, only the dispatch target differs based on `_wink_eye`. The `_wink_unilateral` check (weak channel 10–300µV) is the key separator from eyebrow raise — if both frontal electrodes exceed `thr_eyebrow`, it's treated as eyebrow activity, not a wink. Ratio threshold lowered 3.5 → 2.0 based on real-world data showing genuine wink ratio is typically 1.7–2.2 due to electrode proximity.
+Wink left → AF7 dominates → fires `on_wink_left`. Wink right → AF8 dominates → fires `on_wink_right`. These are two independent commands (separate overlay color, separate OBS scene by default), but they share one detector — the underlying asymmetry/unilateral logic that distinguishes a wink from an eyebrow raise is identical, only the dispatch target differs based on `_wink_eye`. The `_wink_unilateral` check (weak channel 1–400µV) is the key separator from eyebrow raise — if both frontal electrodes exceed `thr_eyebrow`, it's treated as eyebrow activity, not a wink. Ratio threshold lowered 3.5 → 2.0 based on real-world data showing genuine wink ratio is typically 1.7–2.2 due to electrode proximity.
+
+**Unilateral range widened from 10–300µV to 1–400µV**: real logs showed wink left (AF7 dominant) consistently failing because the weak side (AF8) landed either near 0µV — rejected as a "dropout," even though a fully quiet channel during a genuine unilateral wink is expected, not an error — or just above 300µV, rejected as "both sides active" (near-eyebrow). The valid window rarely matched what actually happens during a real wink. Lowering the floor to 1µV and raising the ceiling to 400µV fixed both failure modes without touching the asymmetry ratio check, which still does the heavy lifting of separating wink from eyebrow.
 
 ### Command B — Jaw Clench (`on_jaw_clench`)
 
@@ -116,13 +118,13 @@ Masseter EMG is strong and confined to temporal channels — completely separate
 ```
 Detector   : same Jaw Clench detector as Command B (TP9/TP10 EMG envelope)
 Composer   : GestureComposer — edge-triggered counting, not a separate detector
-Decide delay: 0.6 second, restarted on every jaw RELEASE (not on clench start)
+Decide delay: 1.5 seconds (DECIDE_DELAY), restarted on every jaw RELEASE (not on clench start)
 Outcome    : 1 clench in the window → single jaw_clench
              2+ clenches in the window → double_jaw
 Action     : toggles OBS recording (obs_connector.toggle_record()), not a scene switch
 ```
 
-Every jaw clench rising edge increments a counter in `GestureComposer` and cancels any pending decide-timer (a held clench shouldn't expire mid-clench). The decide-timer is (re)started only on **release** — so however long a clench is held, the "wait for a second clench" window is measured from when the jaw actually relaxes, not from when it tensed. If no second clench edge arrives within `DECIDE_DELAY` (0.6s) of release, the composer fires `on_jaw_clench` (single); if a second edge arrives in time, it fires `on_double_jaw` instead. This is also why a single jaw clench has a perceived ~0.6s delay before the overlay fires — that's the window during which a second clench would still count as a double. `DECIDE_DELAY` was lowered from an initial 1.0s to make double jaw feel snappier; going much lower starts to outrun how fast a jaw can physically clench-release-clench again.
+Every jaw clench rising edge increments a counter in `GestureComposer` and cancels any pending decide-timer (a held clench shouldn't expire mid-clench). The decide-timer is (re)started only on **release** — so however long a clench is held, the "wait for a second clench" window is measured from when the jaw actually relaxes, not from when it tensed. If no second clench edge arrives within `DECIDE_DELAY` (1.5s) of release, the composer fires `on_jaw_clench` (single); if a second edge arrives in time, it fires `on_double_jaw` instead. This is also why a single jaw clench has a perceived delay (currently ~1.5s) before the overlay fires — that's the window during which a second clench would still count as a double. This value has been tuned back and forth (1.0s → 0.6s → 1.5s) — lower values made double jaw feel snappier but require unrealistically fast clench-release-clench timing; the current value favors reliability over speed.
 
 **Double jaw → OBS recording, not a scene**: `on_double_jaw` is wired to `obs_connector.toggle_record()` in `eeg_server.py`, not `switch_scene()`. `toggle_record()` calls `get_record_status()` on OBS to check the *actual* current recording state (`output_active`), then calls `start_record()` or `stop_record()` accordingly — so it stays correct even if the user also starts/stops recording manually from inside OBS between double-jaw triggers. The first double jaw clench in a session starts recording; the next one stops it.
 
@@ -133,11 +135,14 @@ Channel      : AF7 (ch1) and AF8 (ch2)
 Condition A  : AF7 > thr_eyebrow AND AF8 > thr_eyebrow, with max/min ratio < 3.0 (symmetric bilateral)
 Condition B  : max(AF7,AF8) > thr_eyebrow×1.67 AND min(AF7,AF8) > thr_eyebrow×0.67 (asymmetric bilateral)
               thr_eyebrow adaptive, default 300µV, clamp 80–400µV
-Sustained    : ≥ 3 consecutive ticks (~750ms)
+Sustained    : ≥ 3 consecutive ticks, tolerant of 1 isolated non-bilateral tick
+              (streak only resets after 2 consecutive failed ticks, not 1)
 Cooldown     : 3 seconds
 ```
 
 **Solo fallback removed** — previously a path allowed AF8 dropout + AF7 > 1200µV to count as eyebrow (electrode lift). This caused cross-fire with left wink (identical signal: AF7 high, AF8 zero). Eyebrow now requires **both channels valid and bilateral**.
+
+**Sustained streak tuning — 3-tick-strict → 2-tick → 3-tick-with-tolerance**: the original rule (3 ticks bilateral, reset to 0 on any single miss) essentially never fired — real logs showed the streak repeatedly building to 2 and dropping to 0 right before reaching 3, because of one noisy tick in the middle of a genuine raise. Lowering the requirement to 2 ticks made eyebrow raise fire reliably, but logs then showed it firing on brief microexpressions/twitches (~300ms, well under a deliberate raise) — those still had strong, clearly bilateral amplitude (1000–2000µV against an 80–400µV threshold), so amplitude wasn't the issue, duration was. The fix: keep the 3-tick requirement, but track consecutive *misses* (`_eyebrow_miss`) separately from the streak, and only reset the streak once 2 misses happen in a row. A single noisy tick mid-gesture no longer wipes out an otherwise-genuine sustained raise, but a brief twitch still can't accumulate 3 ticks fast enough to fire. The jaw-artefact reset (temporal EMG active, or recent jaw cooldown) is exempt from this tolerance — it still resets the streak immediately, since that boundary needs to stay strict to avoid eyebrow "stealing" jaw clench artefacts.
 
 ### Adaptive EMG Threshold (Per-Session Calibration)
 
@@ -172,7 +177,7 @@ All commands use fundamentally different signal dimensions:
 - **Eyebrow raise** → bilateral frontal activation (both AF7 and AF8 rise together)
 - **Double jaw clench** → same channels as jaw clench, distinguished purely by *edge count within a timing window* (`GestureComposer`), not a different signal dimension
 
-The weak-channel boundary (10–300µV) is the key separator between wink and eyebrow: if both sides exceed `thr_eyebrow`, it's bilateral (eyebrow); if only one side is strong with the other below 300µV, it's unilateral (wink). Observed accuracy: ~90% in real-world use.
+The weak-channel boundary (1–400µV) is the key separator between wink and eyebrow: if both sides exceed `thr_eyebrow`, it's bilateral (eyebrow); if only one side is strong with the other below 400µV, it's unilateral (wink). Observed accuracy: ~90% in real-world use.
 
 ### Overlay FX
 
