@@ -11,12 +11,14 @@
 | **Mental Command Playground** | ✅ Selesai | 5 active commands via `/overlay/mental-command` — wink left, wink right, jaw clench, eyebrow raise, double jaw clench, masing-masing warna berbeda |
 | **State detection** | ✅ Selesai | 3-state calm/flow/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
 | **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
-| **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 > thr_eyebrow (adaptive, default 300µV) + symmetry check (ratio <3.0) + sustained ≥3 tick (~750ms) + cooldown 3s + eyebrow_zone 1.5s |
-| **Wink left/right detection** | ✅ Selesai | Unilateral: satu sisi AF7/AF8 > thr_wink (adaptive, default 800µV) + asimetri ratio >2.0 + weak side 10–300µV, dibedakan AF7≥AF8 (left) vs AF8>AF7 (right) → `on_wink_left`/`on_wink_right` — Command A1/A2 playground |
+| **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 > thr_eyebrow (adaptive, default 300µV) + symmetry check (ratio <3.0) + sustained ≥3 tick, toleran 1 tick noise (reset hanya setelah 2 tick gagal beruntun) + cooldown 3s + eyebrow_zone 1.5s |
+| **Wink left/right detection** | ✅ Selesai | Unilateral: satu sisi AF7/AF8 > thr_wink (adaptive, default 800µV) + asimetri ratio >2.0 + weak side 1–400µV, dibedakan AF7≥AF8 (left) vs AF8>AF7 (right) → `on_wink_left`/`on_wink_right` — Command A1/A2 playground |
 | **Jaw clench detection** | ✅ Selesai | TP9/TP10 EMG envelope (RMS ~300ms tail, bukan ptp window 2s penuh) > thr_jaw (adaptive, default 520µV), rising-edge triggered + guard frontal bleed + cooldown 4s — Command B playground |
-| **Double jaw clench detection** | ✅ Selesai | `GestureComposer` menghitung rising edge jaw clench dalam window 0.6s (diukur dari release, diturunkan dari 1.0s biar lebih snappy) — 2+ edge → double_jaw, 1 edge → single jaw_clench — Command D playground |
+| **Double jaw clench detection** | ✅ Selesai | `GestureComposer` menghitung rising edge jaw clench dalam window 1.5s (`DECIDE_DELAY`, diukur dari release) — 2+ edge → double_jaw, 1 edge → single jaw_clench — Command D playground |
 | **Double jaw → OBS recording toggle** | ✅ Selesai | `double_jaw` tidak switch scene — panggil `obs_connector.toggle_record()`, cek `get_record_status().output_active` lalu `start_record()`/`stop_record()` sesuai state asli OBS |
 | **Wink left vs right split** | ✅ Selesai | `_wink_eye` (AF7≥AF8 → left, else right) sekarang menentukan callback (`on_wink_left`/`on_wink_right`) — sebelumnya satu `on_wink` generik tanpa info sisi |
+| **Wink unilateral range widened** | ✅ Selesai | Weak-side range 10–300µV → 1–400µV — log nyata nunjukin wink kiri (AF7 dominan) sering gagal karena AF8 jatuh ke ~0µV (dianggap dropout) atau >300µV (dianggap dekat-eyebrow) |
+| **Eyebrow sustained tuning** | ✅ Selesai | 3-tick-strict (gagal total) → 2-tick (kena microexpression ~300ms) → 3-tick + toleransi 1 tick noise (final) — lihat detail di BRAINWAVE_MONITOR.md |
 | **Adaptive EMG threshold per-sesi** | ✅ Selesai | 15 detik pertama ukur baseline noise frontal+temporal → thr_eyebrow/wink/jaw dihitung otomatis via median×multiplier, clamp ke range aman |
 | **Global mutex antar detector** | ✅ Selesai | `_last_cmd_time` + `_cmd_idle` (1.5s window) — satu command fire → semua detector diblokir, dua arah, dihitung sekali per tick sebelum semua detektor jalan |
 | **Auto-reconnect** | ✅ Selesai | Jika koneksi Muse putus, retry otomatis dengan backoff 3s→5s→10s→15s, status reconnecting di UI |
@@ -296,7 +298,8 @@ Tiap sesi mencakup fase berikut secara bergantian:
 | **Fase 4b** | ✅ Selesai | Mental Command Playground — 3 commands (wink, jaw clench, eyebrow raise) semua reliable |
 | **Fase 4c** | ✅ Selesai | Double jaw clench (Command D) — `GestureComposer` edge counting + RMS short-tail envelope fix supaya release jaw terdeteksi real-time |
 | **Fase 4d** | ✅ Selesai | Wink dipecah jadi wink left / wink right (Command A1/A2) — `_wink_eye` menentukan `on_wink_left` vs `on_wink_right`, masing-masing overlay color & OBS scene sendiri |
-| **Fase 4e** | ✅ Selesai | Double jaw clench → hotkey OBS recording start/stop (`toggle_record()`), `DECIDE_DELAY` diturunkan 1.0s → 0.6s biar double jaw lebih snappy |
+| **Fase 4e** | ✅ Selesai | Double jaw clench → hotkey OBS recording start/stop (`toggle_record()`) |
+| **Fase 4f** | ✅ Selesai | Tuning akurasi wink/eyebrow dari real-session log — wink unilateral range 10–300µV → 1–400µV, eyebrow sustained 3-tick-strict → 2-tick → 3-tick + toleransi 1 tick noise, `DECIDE_DELAY` jaw di-tuning 1.0s → 0.6s → 1.5s (final, prioritaskan reliability) |
 | **Fase 5** | 🔲 Next | Rekam dataset personal 3–7 sesi, train ML classifier (SVM/LDA) sebagai upgrade dari threshold |
 | **Fase 6** | 🔲 Planned | Integrasi active command ke gameplay nyata — disesuaikan dengan game yang dimainkan |
 
