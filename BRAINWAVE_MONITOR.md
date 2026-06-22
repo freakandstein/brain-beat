@@ -224,7 +224,7 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - **Spectrum slider:** CALM ↔ FLOW ZONE ↔ TENSE gradient with cursor tracking `spectrum_pos`
 - **EEG Channels + Channel Map (side by side):**
   - Left: 3 rolling waveform canvases θ → α → β, colors: theta=green, alpha=blue, beta=purple; Hz centroid label per band
-  - Right: SVG head diagram (TP9, AF7, AF8, TP10), electrode color = signal quality: green/yellow/red/grey
+  - Right: SVG top-down brain illustration with TP9/AF7/AF8/TP10 electrode dots overlaid; dot color = signal quality (green/yellow/red/grey). Dots above weak threshold pulse (scale + glow halo) at a rate proportional to signal quality; off/poor electrodes stay static
 
 **BCI Device Panel** (below main card)
 - Muse 2 connection status, scan + connect/disconnect buttons
