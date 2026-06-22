@@ -220,11 +220,14 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 **Main Card** — one container with all EEG info:
 
 - **State row (top):** Active state badge (CALM / FLOW / TENSE) with color + description on the left; HR (heart rate from PPG) and mental command trigger on the right
-- **Mental command trigger:** appears below HR for 2.5 seconds when a brain signal fires — e.g. `Scene 1 by brain signal` (green). Hidden when idle.
+  - Badge has a continuous breathing animation (scale + opacity); cadence follows state — CALM 3.2s, FLOW 2.2s, TENSE 1.4s
+  - Main card background has an ambient mood-lighting glow (radial gradient) tinted to the current state color, transitioning over 1.2s on state change
+- **Mental command trigger:** appears below HR for 2.5 seconds when a brain signal fires — e.g. `Scene 1 by brain signal` (green). Hidden when idle. Also fires a ripple ring expanding outward from the center of the brain map (Channel Map)
 - **Spectrum slider:** CALM ↔ FLOW ZONE ↔ TENSE gradient with cursor tracking `spectrum_pos`
 - **EEG Channels + Channel Map (side by side):**
   - Left: 3 rolling waveform canvases θ → α → β, colors: theta=green, alpha=blue, beta=purple; Hz centroid label per band
   - Right: SVG top-down brain illustration with TP9/AF7/AF8/TP10 electrode dots overlaid; dot color = signal quality (green/yellow/red/grey). Dots above weak threshold pulse (scale + glow halo) at a rate proportional to signal quality; off/poor electrodes stay static
+  - Neural link line: a dashed arc connects AF7↔AF8 and another connects TP9↔TP10; each arc lights up and animates (flowing dash) only when both electrodes in that pair are simultaneously above the weak-signal threshold
 
 **BCI Device Panel** (below main card)
 - Muse 2 connection status, scan + connect/disconnect buttons

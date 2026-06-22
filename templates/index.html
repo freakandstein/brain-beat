@@ -106,11 +106,14 @@ body {
 
 /* ── Main Card ──────────────────────────────────────── */
 .main-card {
-    background: var(--card);
+    background:
+        radial-gradient(ellipse 140% 100% at 50% -10%, var(--mood-glow, #4ade8000), transparent 65%),
+        var(--card);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 14px 16px;
     margin: 6px 0 10px;
+    transition: background 1.2s ease;
 }
 
 /* ── State row ──────────────────────────────────────── */
@@ -143,6 +146,11 @@ body {
     text-shadow: 0 0 24px #4ade8080;
     min-width: 6.5ch;
     display: block;
+    animation: badgeBreathe 3.2s ease-in-out infinite;
+}
+@keyframes badgeBreathe {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.82; transform: scale(1.015); }
 }
 #state-desc {
     color: var(--dim);
@@ -336,6 +344,38 @@ body {
     100% { r: 14; opacity: 0.45; }
 }
 
+/* ── Neural link lines ───────────────────────────────── */
+.eq-link {
+    fill: none;
+    stroke-width: 1.5;
+    stroke-dasharray: 4 5;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+.eq-link.active {
+    opacity: 0.8;
+    animation: linkFlow 0.9s linear infinite;
+}
+@keyframes linkFlow {
+    to { stroke-dashoffset: -18; }
+}
+
+/* ── Ripple from brain map ───────────────────────────── */
+.eq-ripple {
+    fill: none;
+    stroke: #4ade80;
+    stroke-width: 2;
+    opacity: 0;
+    pointer-events: none;
+}
+.eq-ripple.firing {
+    animation: ripplePulse 0.9s ease-out;
+}
+@keyframes ripplePulse {
+    0%   { r: 10;  opacity: 0.9;  stroke-width: 2.5; }
+    100% { r: 95;  opacity: 0;    stroke-width: 0.5; }
+}
+
 .bci-device-item {
     display: flex;
     align-items: center;
@@ -482,6 +522,13 @@ body {
             <path d="M160,124 C146,120 134,124 126,132" fill="none" stroke-width="0.7" opacity="0.4"/>
           </g>
 
+          <!-- Neural link lines (lit when both sides of a pair are active) -->
+          <path id="link-frontal" class="eq-link" stroke="#4ade80" d="M64,56 Q100,44 136,56"/>
+          <path id="link-temporal" class="eq-link" stroke="#4ade80" d="M21,112 Q100,128 179,112"/>
+
+          <!-- Ripple ring fired on mental command detection -->
+          <circle id="eq-ripple" class="eq-ripple" cx="100" cy="106" r="10"/>
+
           <circle id="halo-AF7" class="eq-halo" cx="64" cy="56" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
           <circle id="halo-AF8" class="eq-halo" cx="136" cy="56" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
           <circle id="halo-TP9" class="eq-halo" cx="21" cy="112" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
@@ -543,7 +590,9 @@ socket.on('state_update', (d) => {
   badge.textContent = displayState;
   badge.style.color = color;
   badge.style.textShadow = `0 0 24px ${color}80`;
+  badge.style.animationDuration = displayState === 'TENSE' ? '1.4s' : displayState === 'FLOW' ? '2.2s' : '3.2s';
   document.getElementById('state-desc').textContent = desc;
+  document.querySelector('.main-card').style.setProperty('--mood-glow', color + '22');
 
   document.getElementById('spectrum-cursor').style.left = (sp * 100) + '%';
   document.getElementById('hr-val').textContent = d.heart_rate ? d.heart_rate + ' bpm' : '—';
@@ -563,6 +612,7 @@ socket.on('state_update', (d) => {
 
 // ── EEG Head Diagram ──────────────────────────────────────────────────────
 function updateHeadDiagram(quality, connected) {
+  const active = {};
   ['AF7', 'AF8', 'TP9', 'TP10'].forEach(name => {
     const el   = document.getElementById('eq-' + name);
     const halo = document.getElementById('halo-' + name);
@@ -571,6 +621,7 @@ function updateHeadDiagram(quality, connected) {
       el.setAttribute('fill', '#3f3f46');
       el.classList.remove('active');
       if (halo) halo.classList.remove('active');
+      active[name] = false;
       return;
     }
     const q = quality[name] ?? 0;
@@ -583,7 +634,13 @@ function updateHeadDiagram(quality, connected) {
       halo.style.animationDuration = (1.6 - q * 0.7) + 's';
     }
     el.style.animationDuration = (1.6 - q * 0.7) + 's';
+    active[name] = q >= 0.35;
   });
+
+  const frontalLink  = document.getElementById('link-frontal');
+  const temporalLink = document.getElementById('link-temporal');
+  if (frontalLink)  frontalLink.classList.toggle('active', active.AF7 && active.AF8);
+  if (temporalLink) temporalLink.classList.toggle('active', active.TP9 && active.TP10);
 }
 
 // ── Muse 2 ────────────────────────────────────────────────────────────────
@@ -680,6 +737,7 @@ function triggerMental(event) {
   card.style.display = '';
   dot.classList.add('active');
   card.classList.add('flash');
+  fireRipple();
 
   clearTimeout(_mentalFlashTimer);
   _mentalFlashTimer = setTimeout(() => {
@@ -687,6 +745,15 @@ function triggerMental(event) {
     dot.classList.remove('active');
     card.classList.remove('flash');
   }, 2500);
+}
+
+function fireRipple() {
+  const ripple = document.getElementById('eq-ripple');
+  if (!ripple) return;
+  ripple.classList.remove('firing');
+  // restart animation
+  void ripple.offsetWidth;
+  ripple.classList.add('firing');
 }
 
 socket.on('wink',          () => triggerMental('wink'));
