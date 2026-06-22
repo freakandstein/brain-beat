@@ -308,6 +308,34 @@ body {
     flex-shrink: 0;
 }
 
+/* ── Electrode pulse animation ───────────────────────── */
+.eq-glow {
+    transition: fill 0.3s ease, opacity 0.3s ease;
+    transform-origin: center;
+}
+.eq-glow.active {
+    animation: eqPulse 1.4s ease-in-out infinite;
+}
+@keyframes eqPulse {
+    0%   { r: 10; opacity: 0.85; }
+    50%  { r: 13; opacity: 1; }
+    100% { r: 10; opacity: 0.85; }
+}
+.eq-halo {
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+.eq-halo.active {
+    opacity: 0.55;
+    animation: haloPulse 1.4s ease-in-out infinite;
+}
+@keyframes haloPulse {
+    0%   { r: 14; opacity: 0.45; }
+    50%  { r: 22; opacity: 0.15; }
+    100% { r: 14; opacity: 0.45; }
+}
+
 .bci-device-item {
     display: flex;
     align-items: center;
@@ -420,17 +448,52 @@ body {
       <div class="map-col">
         <span class="sq-label">EEG CHANNEL MAP</span>
         <svg viewBox="0 0 200 210" width="120" height="126">
-          <circle cx="100" cy="112" r="82" fill="none" stroke="#2a2a4a" stroke-width="1.5"/>
-          <path d="M93,31 L100,22 L107,31" fill="none" stroke="#2a2a4a" stroke-width="1.5" stroke-linejoin="round"/>
-          <path d="M18,112 Q10,112 10,106 Q10,100 18,100" fill="none" stroke="#2a2a4a" stroke-width="1.2"/>
-          <path d="M182,112 Q190,112 190,106 Q190,100 182,100" fill="none" stroke="#2a2a4a" stroke-width="1.2"/>
-          <circle id="eq-AF7" cx="64" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+          <defs>
+            <filter id="eq-blur" x="-100%" y="-100%" width="300%" height="300%">
+              <feGaussianBlur stdDeviation="4"/>
+            </filter>
+          </defs>
+
+          <!-- Brain illustration (top-down view) -->
+          <g id="brain-illustration" fill="#23233a" stroke="#34344f" stroke-width="1.2" stroke-linejoin="round">
+            <path d="M100,24
+                     C123,24 138,33 146,46
+                     C156,44 168,52 169,64
+                     C178,68 183,78 178,88
+                     C186,94 186,106 178,112
+                     C186,120 184,132 174,136
+                     C176,148 168,158 156,158
+                     C152,170 140,178 126,176
+                     C118,186 108,190 100,190
+                     C92,190 82,186 74,176
+                     C60,178 48,170 44,158
+                     C32,158 24,148 26,136
+                     C16,132 14,120 22,112
+                     C14,106 14,94 22,88
+                     C17,78 22,68 31,64
+                     C32,52 44,44 54,46
+                     C62,33 77,24 100,24 Z"/>
+            <path d="M100,30 C100,50 100,70 100,190" fill="none" stroke-width="1" opacity="0.7"/>
+            <path d="M70,40 C66,60 64,82 70,100 C64,118 64,140 72,158" fill="none" stroke-width="0.8" opacity="0.5"/>
+            <path d="M130,40 C134,60 136,82 130,100 C136,118 136,140 128,158" fill="none" stroke-width="0.8" opacity="0.5"/>
+            <path d="M44,90 C56,86 68,90 76,98" fill="none" stroke-width="0.7" opacity="0.4"/>
+            <path d="M156,90 C144,86 132,90 124,98" fill="none" stroke-width="0.7" opacity="0.4"/>
+            <path d="M40,124 C54,120 66,124 74,132" fill="none" stroke-width="0.7" opacity="0.4"/>
+            <path d="M160,124 C146,120 134,124 126,132" fill="none" stroke-width="0.7" opacity="0.4"/>
+          </g>
+
+          <circle id="halo-AF7" class="eq-halo" cx="64" cy="56" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
+          <circle id="halo-AF8" class="eq-halo" cx="136" cy="56" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
+          <circle id="halo-TP9" class="eq-halo" cx="21" cy="112" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
+          <circle id="halo-TP10" class="eq-halo" cx="179" cy="112" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
+
+          <circle id="eq-AF7" class="eq-glow" cx="64" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
           <text x="64" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF7</text>
-          <circle id="eq-AF8" cx="136" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+          <circle id="eq-AF8" class="eq-glow" cx="136" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
           <text x="136" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF8</text>
-          <circle id="eq-TP9" cx="21" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+          <circle id="eq-TP9" class="eq-glow" cx="21" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
           <text x="21" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP9</text>
-          <circle id="eq-TP10" cx="179" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
+          <circle id="eq-TP10" class="eq-glow" cx="179" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
           <text x="179" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP10</text>
         </svg>
         <div class="head-legend">
@@ -501,11 +564,25 @@ socket.on('state_update', (d) => {
 // ── EEG Head Diagram ──────────────────────────────────────────────────────
 function updateHeadDiagram(quality, connected) {
   ['AF7', 'AF8', 'TP9', 'TP10'].forEach(name => {
-    const el = document.getElementById('eq-' + name);
+    const el   = document.getElementById('eq-' + name);
+    const halo = document.getElementById('halo-' + name);
     if (!el) return;
-    if (!connected || quality === null) { el.setAttribute('fill', '#3f3f46'); return; }
+    if (!connected || quality === null) {
+      el.setAttribute('fill', '#3f3f46');
+      el.classList.remove('active');
+      if (halo) halo.classList.remove('active');
+      return;
+    }
     const q = quality[name] ?? 0;
-    el.setAttribute('fill', q >= 0.7 ? '#4ade80' : q >= 0.35 ? '#fbbf24' : '#f87171');
+    const color = q >= 0.7 ? '#4ade80' : q >= 0.35 ? '#fbbf24' : '#f87171';
+    el.setAttribute('fill', color);
+    el.classList.toggle('active', q >= 0.35);
+    if (halo) {
+      halo.setAttribute('fill', color);
+      halo.classList.toggle('active', q >= 0.35);
+      halo.style.animationDuration = (1.6 - q * 0.7) + 's';
+    }
+    el.style.animationDuration = (1.6 - q * 0.7) + 's';
   });
 }
 
