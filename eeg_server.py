@@ -18,8 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 PORT = 8765
 
 from obs_connector import OBSConnector
+from keyboard_connector import KeyboardConnector
 
 obs_connector = OBSConnector(password="OmU3IAuGtlNcUPUY")
+keyboard_connector = KeyboardConnector()
 
 
 def _kill_existing():
@@ -136,6 +138,21 @@ def on_muse_disconnect():
         muse.disconnect()
 
 
+@socketio.on("get_keymap")
+def on_get_keymap():
+    socketio.emit("keymap", keyboard_connector.get_mapping())
+
+
+@socketio.on("set_keymap")
+def on_set_keymap(data):
+    command = (data.get("command") or "").strip()
+    key_combo = (data.get("key") or "").strip()
+    if not command or not key_combo:
+        return
+    keyboard_connector.set_mapping(command, key_combo)
+    socketio.emit("keymap", keyboard_connector.get_mapping())
+
+
 @socketio.on("muse_scan")
 def on_muse_scan():
     """Scan BLE devices dan emit hasilnya ke browser."""
@@ -225,21 +242,25 @@ def main():
             print("⚡  Eyebrow raise detected — triggering overlay")
             socketio.emit("eyebrow_raise", {})
             obs_connector.switch_scene("eyebrow_raise")
+            keyboard_connector.press("eyebrow_raise")
 
         def _wink_left_cb():
             print("😉  Wink left detected — triggering overlay")
             socketio.emit("wink_left", {})
             obs_connector.switch_scene("wink_left")
+            keyboard_connector.press("wink_left")
 
         def _wink_right_cb():
             print("😉  Wink right detected — triggering overlay")
             socketio.emit("wink_right", {})
             obs_connector.switch_scene("wink_right")
+            keyboard_connector.press("wink_right")
 
         def _jaw_clench_cb():
             print("🦷  Jaw clench detected — triggering overlay")
             socketio.emit("jaw_clench", {})
             obs_connector.switch_scene("jaw_clench")
+            keyboard_connector.press("jaw_clench")
 
         def _double_jaw_cb():
             print("🦷🦷  Double jaw detected — triggering overlay")
@@ -247,6 +268,7 @@ def main():
             # Belum ada scene mapping untuk double_jaw — dipakai sebagai
             # hotkey toggle start/stop recording OBS, bukan scene switch.
             obs_connector.toggle_record()
+            keyboard_connector.press("double_jaw")
 
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         muse.on_eyebrow_raise = _eyebrow_cb

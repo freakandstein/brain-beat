@@ -186,6 +186,49 @@
   .leg-sep        { color: #ffffff33; margin: 2px 0; border: none; border-top: 1px solid #ffffff18; }
   .leg-double-jaw  { color: #ffb347; }
 
+  /* ── Keymap panel (bottom-left, dynamic hotkey mapping) ── */
+  #keymap-panel {
+    position: fixed;
+    bottom: 18px; left: 18px;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    color: #ffffffaa;
+    background: rgba(0, 8, 25, 0.6);
+    border: 1px solid #ffffff18;
+    border-radius: 4px;
+    padding: 10px 14px;
+    line-height: 1.9;
+  }
+  #keymap-panel b { letter-spacing: 0.15em; color: #ffffffcc; }
+  .keymap-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .keymap-key {
+    font-family: 'Courier New', monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 2px 9px;
+    border-radius: 4px;
+    border: 1px solid #ffffff2a;
+    background: #ffffff0d;
+    color: #ffffffaa;
+    cursor: pointer;
+    min-width: 56px;
+    text-align: center;
+    transition: all 0.15s;
+  }
+  .keymap-key:hover { border-color: #ffffff66; color: #ffffffee; }
+  .keymap-key.listening {
+    color: #fbbf24;
+    border-color: #fbbf24;
+    animation: blink 0.9s infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
   /* ── Combo badge (shown inside HUD for combo commands) ── */
   #combo-badge {
     font-size: clamp(0.38rem, 0.6vw, 0.55rem);
@@ -224,6 +267,31 @@
   <div class="leg-relax">● Eyebrow raise → Cmd C (EMG, AF7/AF8)</div>
   <hr class="leg-sep">
   <div class="leg-double-jaw">●● Double jaw → Cmd D</div>
+</div>
+
+<!-- Keymap panel: mental command → keyboard hotkey -->
+<div id="keymap-panel">
+  <div><b>KEYMAP</b></div>
+  <div class="keymap-row" data-command="wink_left">
+    <span>Wink Left</span>
+    <button class="keymap-key" data-command="wink_left" onclick="startKeyCapture(this)">—</button>
+  </div>
+  <div class="keymap-row" data-command="wink_right">
+    <span>Wink Right</span>
+    <button class="keymap-key" data-command="wink_right" onclick="startKeyCapture(this)">—</button>
+  </div>
+  <div class="keymap-row" data-command="eyebrow_raise">
+    <span>Eyebrow Raise</span>
+    <button class="keymap-key" data-command="eyebrow_raise" onclick="startKeyCapture(this)">—</button>
+  </div>
+  <div class="keymap-row" data-command="jaw_clench">
+    <span>Jaw Clench</span>
+    <button class="keymap-key" data-command="jaw_clench" onclick="startKeyCapture(this)">—</button>
+  </div>
+  <div class="keymap-row" data-command="double_jaw">
+    <span>Double Jaw</span>
+    <button class="keymap-key" data-command="double_jaw" onclick="startKeyCapture(this)">—</button>
+  </div>
 </div>
 
 <!-- Signal HUD (top-right) -->
@@ -772,6 +840,56 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Digit4') triggerOverlay('eyebrow_raise');
   if (e.code === 'Digit5') triggerOverlay('double_jaw');
 });
+
+// ── Keymap panel: capture a key and send it to the server ─────────────────
+const KEY_LABELS = {
+  ' ': 'space', 'arrowleft': 'left', 'arrowright': 'right',
+  'arrowup': 'up', 'arrowdown': 'down', 'escape': 'esc',
+};
+
+let _capturingBtn = null;
+
+function startKeyCapture(btn) {
+  if (_capturingBtn) _capturingBtn.classList.remove('listening');
+  _capturingBtn = btn;
+  btn.classList.add('listening');
+  btn.textContent = '...';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!_capturingBtn) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const parts = [];
+  if (e.metaKey)  parts.push('cmd');
+  if (e.ctrlKey)  parts.push('ctrl');
+  if (e.altKey)   parts.push('alt');
+  if (e.shiftKey) parts.push('shift');
+
+  const k = e.key.toLowerCase();
+  if (!['meta', 'control', 'alt', 'shift'].includes(k)) {
+    parts.push(KEY_LABELS[k] || k);
+  }
+  if (parts.length === 0) return;
+
+  const combo   = parts.join('+');
+  const command = _capturingBtn.dataset.command;
+  _capturingBtn.classList.remove('listening');
+  _capturingBtn.textContent = combo;
+  _capturingBtn = null;
+
+  socket.emit('set_keymap', { command, key: combo });
+}, true);
+
+socket.on('keymap', (map) => {
+  document.querySelectorAll('.keymap-key').forEach((btn) => {
+    const command = btn.dataset.command;
+    if (map[command]) btn.textContent = map[command];
+  });
+});
+
+socket.on('connect', () => socket.emit('get_keymap'));
 </script>
 </body>
 </html>
