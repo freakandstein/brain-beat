@@ -861,17 +861,15 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   e.stopPropagation();
 
+  const k = e.key.toLowerCase();
+  if (['meta', 'control', 'alt', 'shift'].includes(k)) return;
+
   const parts = [];
   if (e.metaKey)  parts.push('cmd');
   if (e.ctrlKey)  parts.push('ctrl');
   if (e.altKey)   parts.push('alt');
   if (e.shiftKey) parts.push('shift');
-
-  const k = e.key.toLowerCase();
-  if (!['meta', 'control', 'alt', 'shift'].includes(k)) {
-    parts.push(KEY_LABELS[k] || k);
-  }
-  if (parts.length === 0) return;
+  parts.push(KEY_LABELS[k] || k);
 
   const combo   = parts.join('+');
   const command = _capturingBtn.dataset.command;

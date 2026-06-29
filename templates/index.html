@@ -94,6 +94,27 @@ body {
     cursor: pointer;
 }
 #bci-btn.connected:hover { background: #243a2a; }
+#mute-btn {
+    font-family: 'Courier New', monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--accent);
+    color: var(--dim);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+#mute-btn:hover { border-color: var(--text); color: var(--text); }
+#mute-btn.muted {
+    color: #f87171;
+    border-color: #f87171;
+    background: #2e1a1a;
+}
+#mute-btn.muted:hover { background: #3a2222; }
 .bci-device-list {
     display: flex;
     flex-direction: column;
@@ -408,6 +429,7 @@ body {
         FluidSynth &nbsp;·&nbsp; Generative &nbsp;·&nbsp; Realtime
       </div>
       <div class="bci-wrap">
+        <button id="mute-btn" onclick="muteBtnClick()">&#x1F50A; Mute</button>
         <button id="bci-btn" onclick="bciBtnClick()">&#x1F50D; Connect</button>
         <div class="bci-device-list" id="bci-device-list"></div>
       </div>
@@ -574,6 +596,26 @@ socket.on('disconnect', () => {
   dot.style.background = '#f87171';
   dot.style.animation  = 'none';
 });
+
+// ── Mute ───────────────────────────────────────────────────────────────────
+let isMuted = false;
+
+function renderMuteBtn() {
+  const btn = document.getElementById('mute-btn');
+  btn.innerHTML = isMuted ? '&#x1F507; Unmute' : '&#x1F50A; Mute';
+  btn.classList.toggle('muted', isMuted);
+}
+
+function muteBtnClick() {
+  socket.emit('set_mute', { muted: !isMuted });
+}
+
+socket.on('mute_state', (d) => {
+  isMuted = !!d.muted;
+  renderMuteBtn();
+});
+
+socket.on('connect', () => socket.emit('get_mute'));
 
 socket.on('state_update', (d) => {
   const sp = d.spectrum_pos ?? 0.2;

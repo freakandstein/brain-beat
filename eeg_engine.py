@@ -209,6 +209,7 @@ class MusicEngine:
         self._arousal_buf   = deque(maxlen=480)
         self._adaptive_threshold = 0.02    # default lebih tinggi — bias ke calm
         self._warmup_ticks  = 60           # 15 detik × 4 tick/detik
+        self._muted = False
 
         self.fs = fluidsynth.Synth(gain=0.8, samplerate=44100.0)
         self.fs.start(driver="coreaudio")
@@ -225,6 +226,16 @@ class MusicEngine:
         print("✅  Brainwave Monitor siap.")
 
     # ── public API ──────────────────────────────────────────────────────────
+
+    def set_muted(self, muted: bool) -> None:
+        """Mute/unmute drum output via MIDI CC7 (channel volume), tanpa stop synth."""
+        with self._lock:
+            self._muted = muted
+            self.fs.cc(CH_DRUMS, 7, 0 if muted else 127)
+
+    def is_muted(self) -> bool:
+        with self._lock:
+            return self._muted
 
     def set_eeg(self, alpha: float, beta: float, theta: float,
                 tbr: float = 0.5, tbr_raw: float = 1.0,
