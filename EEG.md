@@ -4,8 +4,10 @@
 
 | Komponen | Status | Keterangan |
 |---|---|---|
-| **music_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, 3-state calm/flow/tense, adaptive threshold (60s warm-up), tense_level build-up, flow_score dari frontal EEG |
-| **music_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR + eyebrow_raise event |
+| **eeg_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, 3-state calm/flow/tense, adaptive threshold (60s warm-up), tense_level build-up, flow_score dari frontal EEG, mute/unmute via MIDI CC7 channel volume |
+| **eeg_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR + eyebrow_raise event |
+| **keyboard_connector.py** | ✅ Selesai | Mapping mental command → keystroke OS via pynput, persist di `keymap.json`, support kombinasi modifier (cmd/ctrl/alt/shift + key), diatur lewat UI capture di overlay |
+| **Mute/unmute instrument** | ✅ Selesai | Button di index.html toggle `set_mute`/`get_mute` socket event — server set channel volume drum ke 0 (mute) / 127 (unmute) tanpa stop synth |
 | **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAINWAVE MONITOR" — single card: state badge, HR, mental command trigger (Scene N by brain signal), spectrum slider, EEG waveforms θ/α/β + Hz display, EEG channel map SVG, status reconnecting |
 | **Overlay FX (overlay_mental_command.html)** | ✅ Selesai | Full-screen visual FX per command — electric arc, scan line, edge glow, auto-hide 2.8s (4s untuk combo), 5 warna berbeda |
 | **Mental Command Playground** | ✅ Selesai | 5 active commands via `/overlay/mental-command` — wink left, wink right, jaw clench, eyebrow raise, double jaw clench, masing-masing warna berbeda |
@@ -154,17 +156,19 @@ Mental State Classifier       ← [✅ Impl.] 3-state calm/flow/tense
     ↓                                      Adaptive threshold: warm-up 60s → median+0.03
     ↓                                      Vote buffer 20 tick (70% supermajority)
 BrainBeat Drum Engine         ← [✅ Impl.] FluidSynth GM channel 9 (drums only)
-(music_engine.py)                          CALM: brush jazz 55–65 BPM
+(eeg_engine.py)                            CALM: brush jazz 55–65 BPM
     ↓                                      FLOW: groove mid-tempo 72–85 BPM
     ↓                                      TENSE: battle drums 95–135 BPM
     ↓                                      STRESS escalation (tense_level > 0.65): double-time kick
     ↓                                      Musik HANYA aktif saat Muse 2 terhubung
+    ↓                                      Mute/unmute via MIDI CC7 channel volume (set_muted/is_muted)
 WebSocket Server              ← [✅ Impl.] Flask-SocketIO, port 8765
-(music_server.py)                          payload: state, BPM, tense_level,
+(eeg_server.py)                            payload: state, BPM, tense_level,
     ↓                                      arousal, threshold, confidence, consistency,
     ↓                                      warming_up, eeg_active
     ↓                                      θ/α/β raw µV², θ/α/β Hz centroid, HR, muse status
     ↓                                      event: eyebrow_raise (SocketIO emit)
+    ↓                                      event: get_mute/set_mute/mute_state, get_keymap/set_keymap/keymap
 HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAINWAVE MONITOR" — single card layout:
 (templates/index.html)                     state badge (CALM/FLOW/TENSE) + HR + mental command trigger,
     ↓                                      spectrum slider (spectrum_pos 0..1),
@@ -314,7 +318,7 @@ Ide-ide di bawah ini melampaui use case utama streaming game, mencakup berbagai 
 **1. EEG-Reactive Drum Engine (BrainBeat)** ✅ *Live — Muse 2 terhubung*
 Pola drum generatif yang berubah berdasarkan mental state secara live. Tempo dan intensitas drum mengikuti sinyal alpha/beta/theta dari Muse 2 secara langsung.
 
-Stack: **FluidSynth 2.4.x + pyfluidsynth 1.3.4 + Soundfont GM ch9** via `music_engine.py` (BrainBeat).
+Stack: **FluidSynth 2.4.x + pyfluidsynth 1.3.4 + Soundfont GM ch9** via `eeg_engine.py` (BrainBeat).
 
 | State | Karakter Drum | BPM |
 |---|---|---|
