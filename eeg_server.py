@@ -118,6 +118,20 @@ def on_set_preset(data):
         })
 
 
+@socketio.on("get_mute")
+def on_get_mute():
+    if engine:
+        socketio.emit("mute_state", {"muted": engine.is_muted()})
+
+
+@socketio.on("set_mute")
+def on_set_mute(data):
+    if engine:
+        muted = bool(data.get("muted"))
+        engine.set_muted(muted)
+        socketio.emit("mute_state", {"muted": muted})
+
+
 @socketio.on("muse_connect")
 def on_muse_connect(data):
     global muse
