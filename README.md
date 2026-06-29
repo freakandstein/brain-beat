@@ -64,6 +64,8 @@ Five distinct gestures trigger a full-screen visual FX overlay at `/overlay/ment
 
 To test without a Muse: open `/overlay/mental-command` and press **Shift+1** through **Shift+5**.
 
+**Custom keymap**: each command can be remapped to any OS keystroke (including modifier combos like `cmd+r`) from the keymap panel on `/overlay/mental-command` — click a command's key button, then press the combo. Saved to `keymap.json` and sent via `pynput` (`keyboard_connector.py`) whenever that command fires.
+
 ### Mental State Detection
 
 The system classifies three states in real-time via a continuous spectrum:
@@ -154,6 +156,7 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 ```
 
 **UI elements:**
+- **Mute button** — toggles drum output (MIDI CC7 channel volume), header next to Connect
 - **STATE** — CALM / FLOW / TENSE badge with color (green / yellow / purple)
 - **HR** — heart rate from Muse 2 PPG, top-right of state row
 - **Mental command trigger** — appears below HR for 2.5s when a brain signal fires: `Scene 1 by brain signal` (green). Hidden when idle.
@@ -238,5 +241,7 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | Double jaw clench detection (GestureComposer edge counting) | ✅ |
 | OBS scene switching via mental commands | ✅ |
 | OBS recording start/stop toggle via double jaw clench | ✅ |
+| Custom keymap per mental command (modifier combos supported) | ✅ |
+| Mute/unmute drum output (UI button) | ✅ |
 | Auto-reconnect with backoff | ✅ |
 | ML classifier (SVM/LDA) | 🔲 planned |

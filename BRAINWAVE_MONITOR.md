@@ -234,6 +234,15 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - Socket live-dot (header): grey=idle, green=connected, red=disconnected
 - Auto-reconnect with backoff (3s → 5s → 10s → 15s); UI shows `🔄 Reconnecting...` during retries
 
+**Mute button** (header, next to Connect)
+- Toggles the drum engine's output via `set_mute`/`get_mute` socket events — `eeg_engine.py`'s `set_muted()` sets MIDI CC7 (channel volume) to 0 (muted) or 127 (unmuted) on the drum channel, without stopping/restarting FluidSynth
+- Button state (`mute_state` event) syncs on connect and is styled to match `#bci-btn` (red border/background when muted, same as the green "connected" state)
+
+**Keymap panel** (`/overlay/mental-command`)
+- Each mental command (wink_left, wink_right, eyebrow_raise, jaw_clench, double_jaw) can be remapped to any OS keystroke, including modifier combos (e.g. `cmd+r`)
+- Click a command's key button, then press the desired key combo — captured via a capture-phase `keydown` listener that waits for a non-modifier key before committing (so holding Cmd then pressing R correctly resolves to `cmd+r`, not just `cmd`)
+- Saved via `set_keymap` socket event → persisted to `keymap.json` by `keyboard_connector.py`, which sends the keystroke through `pynput` whenever the mapped mental command fires
+
 **Mental Commands** (socket events → UI trigger):
 - `wink_left` → Scene 1 by brain signal
 - `wink_right` → Scene 1 by brain signal (same default scene as wink_left, configurable independently)
