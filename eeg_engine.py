@@ -205,10 +205,11 @@ class MusicEngine:
         self._state_votes = deque(maxlen=20)
 
         # Adaptive threshold — rolling buffer 120 detik (4 Hz × 120 = 480 samples)
-        # Warm-up diperpendek ke 30 detik supaya adaptasi lebih cepat
+        # Warm-up 2 menit: threshold dikunci dari baseline, tidak bergeser saat sesi A/B
         self._arousal_buf   = deque(maxlen=480)
         self._adaptive_threshold = 0.02    # default lebih tinggi — bias ke calm
-        self._warmup_ticks  = 60           # 15 detik × 4 tick/detik
+        self._warmup_ticks  = 480          # 2 menit × 4 tick/detik
+        self._threshold_frozen = False     # True setelah baseline selesai
         self._muted = False
 
         self.fs = fluidsynth.Synth(gain=0.8, samplerate=44100.0)
@@ -263,11 +264,26 @@ class MusicEngine:
     def is_warming_up(self) -> bool:
         return self._tick < self._warmup_ticks
 
+    def reset_session(self):
+        """Kosongkan vote buffer saat switch sesi A/B supaya transisi bersih."""
+        with self._lock:
+            self._state_votes.clear()
+            self._prev_state = None
+
     def get_consistency(self) -> float:
         if not self._state_votes:
             return 0.0
         top = Counter(self._state_votes).most_common(1)[0][1]
         return round(top / len(self._state_votes), 3)
+
+    def calm_score(self) -> float:
+        """
+        Skor ketenangan 0–100.
+        Gabungan alpha (bobot 50%) + flow_score (bobot 30%) + (1−beta) (bobot 20%).
+        Tinggi = tenang; rendah = aktif/stres.
+        """
+        raw = 0.50 * self.eeg.alpha + 0.30 * max(0.0, self.get_flow_score()) + 0.20 * (1.0 - self.eeg.beta)
+        return round(min(100.0, max(0.0, raw * 100.0)), 1)
 
     def get_flow_score(self) -> float:
         """
@@ -330,14 +346,15 @@ class MusicEngine:
                 # Feed arousal ke adaptive buffer
                 self._arousal_buf.append(eeg.arousal())
 
-                # Update threshold setiap 120 tick (~30 detik) setelah warm-up
-                if (self._tick >= self._warmup_ticks
-                        and self._tick % 120 == 0
+                # Saat warm-up selesai: kunci threshold dari baseline, tidak berubah lagi
+                if (self._tick == self._warmup_ticks
+                        and not self._threshold_frozen
                         and len(self._arousal_buf) >= 60):
                     import statistics
                     median = statistics.median(self._arousal_buf)
                     self._adaptive_threshold = round(median + 0.03, 4)
-                    print(f"  ⚙  Adaptive threshold → {self._adaptive_threshold:.4f}")
+                    self._threshold_frozen = True
+                    print(f"  ⚙  Baseline selesai — threshold dikunci: {self._adaptive_threshold:.4f}")
 
                 # Vote buffer — 3-state: calm / flow / tense
                 # spectrum_pos: 0..0.35 = calm, 0.35..0.65 = flow, 0.65..1 = tense

@@ -83,7 +83,8 @@
       toConfig   = cfg;
       blend = 0;
       currentState = s;
-      document.getElementById('state-label').textContent = s.toUpperCase();
+      const STATE_LABELS = { calm: 'TENANG', flow: 'FOKUS', tense: 'AKTIF' };
+      document.getElementById('state-label').textContent = STATE_LABELS[s] || s.toUpperCase();
     }
 
     function lerpConfig(a, b, t) {

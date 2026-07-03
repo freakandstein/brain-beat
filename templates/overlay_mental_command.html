@@ -261,35 +261,35 @@
 <!-- Dev legend -->
 <div id="legend">
   <div><b>MENTAL COMMAND PLAYGROUND</b></div>
-  <div class="leg-wink-left">● Wink left → Cmd A1 (EOG, AF7)</div>
-  <div class="leg-wink-right">● Wink right → Cmd A2 (EOG, AF8)</div>
-  <div class="leg-jaw">● Jaw clench → Cmd B (EMG, TP9/TP10)</div>
-  <div class="leg-relax">● Eyebrow raise → Cmd C (EMG, AF7/AF8)</div>
+  <div class="leg-wink-left">● Kedip kiri → Perintah A1 (EOG, AF7)</div>
+  <div class="leg-wink-right">● Kedip kanan → Perintah A2 (EOG, AF8)</div>
+  <div class="leg-jaw">● Gigit gigi → Perintah B (EMG, TP9/TP10)</div>
+  <div class="leg-relax">● Angkat alis → Perintah C (EMG, AF7/AF8)</div>
   <hr class="leg-sep">
-  <div class="leg-double-jaw">●● Double jaw → Cmd D</div>
+  <div class="leg-double-jaw">●● Gigit ganda → Perintah D</div>
 </div>
 
 <!-- Keymap panel: mental command → keyboard hotkey -->
 <div id="keymap-panel">
   <div><b>KEYMAP</b></div>
   <div class="keymap-row" data-command="wink_left">
-    <span>Wink Left</span>
+    <span>Kedip Kiri</span>
     <button class="keymap-key" data-command="wink_left" onclick="startKeyCapture(this)">—</button>
   </div>
   <div class="keymap-row" data-command="wink_right">
-    <span>Wink Right</span>
+    <span>Kedip Kanan</span>
     <button class="keymap-key" data-command="wink_right" onclick="startKeyCapture(this)">—</button>
   </div>
   <div class="keymap-row" data-command="eyebrow_raise">
-    <span>Eyebrow Raise</span>
+    <span>Angkat Alis</span>
     <button class="keymap-key" data-command="eyebrow_raise" onclick="startKeyCapture(this)">—</button>
   </div>
   <div class="keymap-row" data-command="jaw_clench">
-    <span>Jaw Clench</span>
+    <span>Gigit Gigi</span>
     <button class="keymap-key" data-command="jaw_clench" onclick="startKeyCapture(this)">—</button>
   </div>
   <div class="keymap-row" data-command="double_jaw">
-    <span>Double Jaw</span>
+    <span>Gigit Ganda</span>
     <button class="keymap-key" data-command="double_jaw" onclick="startKeyCapture(this)">—</button>
   </div>
 </div>
@@ -713,8 +713,8 @@ const COMMANDS = {
   wink_left: {
     hue: 190, accent: '#00eaff', glow: '#00aaff', accentDim: '#00eaff44',
     label: 'EOG · AF7',
-    main:  'WINK LEFT',
-    sub:   'unilateral ocular · left frontal burst',
+    main:  'KEDIP KIRI',
+    sub:   'sinyal mata · lobus frontal kiri',
     channels: ['AF7'],
     conf: 92, lat: 10, pow: 38,
     combo: false,
@@ -722,8 +722,8 @@ const COMMANDS = {
   wink_right: {
     hue: 320, accent: '#ff6bd6', glow: '#ff3ac4', accentDim: '#ff6bd644',
     label: 'EOG · AF8',
-    main:  'WINK RIGHT',
-    sub:   'unilateral ocular · right frontal burst',
+    main:  'KEDIP KANAN',
+    sub:   'sinyal mata · lobus frontal kanan',
     channels: ['AF8'],
     conf: 92, lat: 10, pow: 38,
     combo: false,
@@ -731,8 +731,8 @@ const COMMANDS = {
   jaw_clench: {
     hue: 14, accent: '#ff5e3a', glow: '#ff8a3a', accentDim: '#ff5e3a44',
     label: 'EMG · TP9 / TP10',
-    main:  'JAW CLENCH',
-    sub:   'electromyography · masseter burst',
+    main:  'GIGIT GIGI',
+    sub:   'sinyal otot rahang · temporal kiri & kanan',
     channels: ['TP9','TP10'],
     conf: 91, lat: 12, pow: 68,
     combo: false,
@@ -740,8 +740,8 @@ const COMMANDS = {
   eyebrow_raise: {
     hue: 110, accent: '#7cff6b', glow: '#9bff6b', accentDim: '#7cff6b44',
     label: 'EMG · AF7 / AF8',
-    main:  'EYEBROW RAISE',
-    sub:   'frontalis burst · facial muscle',
+    main:  'ANGKAT ALIS',
+    sub:   'sinyal otot dahi · frontal kiri & kanan',
     channels: ['AF7','AF8'],
     conf: 83, lat: 22, pow: 35,
     combo: false,
@@ -749,9 +749,9 @@ const COMMANDS = {
   // ── Combo commands ──
   double_jaw: {
     hue: 35, accent: '#ffb347', glow: '#ff8c00', accentDim: '#ffb34744',
-    label: 'COMBO · TP9 / TP10',
-    main:  'DOUBLE JAW',
-    sub:   'sequential masseter · dual EMG burst',
+    label: 'KOMBO · TP9 / TP10',
+    main:  'GIGIT GANDA',
+    sub:   'dua kali gigit berurutan · sinyal EMG ganda',
     channels: ['TP9','TP10'],
     conf: 87, lat: 16, pow: 72,
     combo: true,
@@ -782,7 +782,7 @@ function triggerOverlay(commandKey) {
 
   // Combo badge — tampil hanya untuk combo commands
   if (cmd.combo) {
-    elComboBadge.textContent = '⚡ COMBO SEQUENCE';
+    elComboBadge.textContent = '⚡ KOMBO BERURUTAN';
     elComboBadge.classList.add('show');
   } else {
     elComboBadge.classList.remove('show');

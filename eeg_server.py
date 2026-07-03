@@ -59,6 +59,9 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 engine: MusicEngine = None
 muse:   "MuseConnector" = None  # type: ignore
+_session_label: str = "baseline"   # "baseline" | "musik" | "quran"
+_session_scores: dict = {"musik": [], "quran": []}   # akumulasi calm_score per sesi
+_session_results: dict = {"musik": None, "quran": None}  # rata-rata final tiap sesi
 
 PRESETS = {
     "calm":  (0.80, 0.15, 0.20),   # alpha, beta, theta
@@ -130,6 +133,29 @@ def on_set_mute(data):
         muted = bool(data.get("muted"))
         engine.set_muted(muted)
         socketio.emit("mute_state", {"muted": muted})
+
+
+@socketio.on("set_session")
+def on_set_session(data):
+    global _session_label, _session_scores, _session_results
+    label = (data.get("label") or "baseline").strip().lower()
+    if label not in ("baseline", "musik", "quran"):
+        return
+    # Simpan hasil rata-rata sesi sebelumnya sebelum switch
+    prev = _session_label
+    if prev in _session_scores and _session_scores[prev]:
+        _session_results[prev] = round(sum(_session_scores[prev]) / len(_session_scores[prev]), 1)
+        _session_scores[prev] = []
+    _session_label = label
+    if label in _session_scores:
+        _session_scores[label] = []
+    if engine:
+        engine.reset_session()
+    socketio.emit("session_changed", {
+        "label":   _session_label,
+        "results": _session_results,
+    })
+    print(f"  🎙  Sesi → {_session_label}")
 
 
 @socketio.on("muse_connect")
@@ -206,6 +232,10 @@ def _background_updater():
                         "flow_score":  engine.get_flow_score(),
                         "spectrum_pos": engine.get_spectrum_position(),
                         "eeg_active":  engine._running,
+                        "session":     _session_label,
+                        "threshold_frozen": engine._threshold_frozen,
+                        "calm_score":  engine.calm_score(),
+                        "session_results": _session_results,
                         "alpha": round(eeg.alpha, 3),
                         "beta":  round(eeg.beta,  3),
                         "theta": round(eeg.theta, 3),
@@ -220,6 +250,8 @@ def _background_updater():
                         "heart_rate": muse.heart_rate if muse else None,
                         "channel_quality": muse.channel_quality if muse else None,
                     }
+                if _session_label in _session_scores and engine._running:
+                    _session_scores[_session_label].append(engine.calm_score())
                 socketio.emit("state_update", payload)
         except Exception as e:
             print(f"⚠️  _background_updater error: {e}")
@@ -247,6 +279,7 @@ def main():
         def _muse_status_cb(status: str, error: str):
             socketio.emit("muse_status", {"status": status, "error": error})
             if status == "connected" and engine:
+                engine.set_muted(True)
                 engine.start()
             elif status in ("disconnected", "error") and engine:
                 engine.stop()
