@@ -261,6 +261,39 @@ class MuseConnector:
         self._thr_eyebrow: float = 300.0
         self._thr_jaw:     float = 520.0
 
+        # ── Cursor Control Mode (head-tilt joystick, gyro+accelerometer) ────
+        # Saat False: jaw clench tetap berjalan seperti biasa (OBS scene +
+        # keystroke) — lihat eeg_server.py. Saat True: jaw clench single-fire
+        # di-reroute jadi left-click, dan tilt kepala menggerakkan cursor OS.
+        # Double-jaw TIDAK berubah (tetap toggle recording OBS) di kedua mode.
+        self.cursor_control_enabled: bool = False
+        self._cursor_baseline_ready: bool = False   # False selama jeda recenter (lihat _RECENTER_DELAY_S)
+        self._recenter_timer: Optional[threading.Timer] = None
+        self._imu_baseline: tuple = (0.0, 0.0, 1.0)
+        self._tilt_ema_up:    float = 0.0
+        self._tilt_ema_right: float = 0.0
+        self._latest_acc:  tuple = (0.0, 0.0, 1.0)
+        self._latest_gyro: tuple = (0.0, 0.0, 0.0)
+        self._acc_recent:  list  = []   # rolling buffer utk baseline recenter (rata-rata, bukan 1 sample)
+        self._imu_thread: Optional[threading.Thread] = None
+        self._imu_thread_stop = threading.Event()
+        self.cursor_velocity_x: float = 0.0   # px/detik — dibaca mouse_connector
+        self.cursor_velocity_y: float = 0.0
+        self.on_cursor_velocity: Optional[Callable] = None   # (vx, vy) -> None
+
+        # ── Kalibrasi arah eksplisit (right/up basis vector) ────────────────
+        # Axis fisik chip Muse 2 di kepala TIDAK bisa diasumsikan statis
+        # (index tetap X=roll, Y=pitch) — data nyata menunjukkan tergantung
+        # cara headset terpasang, satu axis fisik bisa menangkap kombinasi
+        # roll+pitch sekaligus (terbukti dari log: X punya std 3x lebih besar
+        # dari Y dan berkorelasi 0.625 dengan Y — bukan axis independen murni).
+        # Solusi: minta user tilt eksplisit ke KANAN lalu ke ATAS setelah
+        # baseline netral, ukur vektor deviasi accel nyata sebagai basis
+        # right/up — bukan menebak index axis mana yang "seharusnya" roll/pitch.
+        self.cursor_calib_phase: str = "idle"   # idle|neutral|right|up|ready
+        self._calib_right_vec: Optional[tuple] = None
+        self._calib_up_vec: Optional[tuple] = None
+
         # Internal
         self.running       = False
         self._loop_tick    = 0
@@ -284,10 +317,166 @@ class MuseConnector:
             target=self._connect_thread, args=(mac_address,), daemon=True
         ).start()
 
+    # Kalibrasi cursor control: 3 tahap berurutan, tiap tahap tunggu accel
+    # STABIL (variance rendah) dulu sebelum lanjut — bukan delay waktu tetap
+    # (terbukti dari log nyata: delay tetap masih bisa merekam baseline salah
+    # kalau kepala belum benar-benar diam persis di detik yang ditentukan).
+    #   1. neutral — kepala level, rekam _imu_baseline
+    #   2. right   — user tilt ke kanan & tahan, rekam _calib_right_vec
+    #   3. up      — user tilt ke atas & tahan, rekam _calib_up_vec
+    # Kalibrasi arah (bukan cuma index axis statis) diperlukan karena axis
+    # fisik chip Muse 2 tidak bisa diasumsikan sejajar sempurna dengan
+    # roll/pitch anatomis — data nyata menunjukkan 1 axis kadang menangkap
+    # kombinasi keduanya tergantung cara headset terpasang.
+    _STABILITY_POLL_S     = 0.1     # interval cek stabilitas
+    _STABILITY_WINDOW_N   = 8       # jumlah sample dicek (~0.8s @ 100ms poll)
+    _STABILITY_STD_THRESH = 0.02    # std max per-axis (g) supaya dianggap "diam/tertahan"
+    _STABILITY_TIMEOUT_S  = 6.0     # fallback per tahap: lanjut walau belum stabil
+
+    def set_cursor_control(self, enabled: bool) -> None:
+        """Toggle Cursor Control Mode. Velocity tetap 0 sampai seluruh
+        kalibrasi 3-tahap selesai (lihat _run_cursor_calibration) — cursor
+        hanya aktif setelah cursor_calib_phase == 'ready'."""
+        # cursor_control_enabled di-set DULU sebelum start thread baru —
+        # thread lama (jika masih berjalan dari toggle sebelumnya) mengecek
+        # flag ini di while-loop-nya dan keluar sendiri dalam
+        # <=_STABILITY_POLL_S detik (plain Thread, tidak perlu di-cancel).
+        self.cursor_control_enabled = enabled
+        self._cursor_baseline_ready = False
+        self.cursor_calib_phase = "neutral" if enabled else "idle"
+        self._calib_right_vec = None
+        self._calib_up_vec = None
+        self._recenter_timer = None
+        if enabled:
+            self._recenter_timer = threading.Thread(
+                target=self._run_cursor_calibration, daemon=True
+            )
+            self._recenter_timer.start()
+        else:
+            self.cursor_velocity_x = 0.0
+            self.cursor_velocity_y = 0.0
+
+    def _wait_for_stable_window(self) -> Optional[list]:
+        """Poll accel tiap _STABILITY_POLL_S sampai window terakhir
+        (_STABILITY_WINDOW_N sample) punya std rendah di semua axis, lalu
+        return window itu. _STABILITY_TIMEOUT_S adalah fallback per tahap
+        supaya kalibrasi tidak macet selamanya kalau user tidak benar-benar
+        menahan posisi (tetap lanjut pakai data seadanya). Return None kalau
+        mode dimatikan/thread lama sebelum sempat stabil."""
+        t_start = time.time()
+        window: list = []
+        while self.cursor_control_enabled and not self._imu_thread_stop.is_set():
+            window.append(self._latest_acc)
+            if len(window) > self._STABILITY_WINDOW_N:
+                window.pop(0)
+            elapsed = time.time() - t_start
+            if len(window) >= self._STABILITY_WINDOW_N:
+                arr = np.array(window)
+                stds = np.std(arr, axis=0)
+                if np.all(stds < self._STABILITY_STD_THRESH):
+                    return window
+            if elapsed > self._STABILITY_TIMEOUT_S:
+                return window if window else None
+            time.sleep(self._STABILITY_POLL_S)
+        return None
+
+    def _run_cursor_calibration(self) -> None:
+        """Jalankan 3 tahap kalibrasi berurutan: neutral → right → up →
+        ready. Tiap tahap tunggu accel stabil (_wait_for_stable_window),
+        rekam vektor rata-rata window itu, lalu pindah ke tahap berikutnya.
+        UI (index.html) membaca cursor_calib_phase via state_update untuk
+        menampilkan instruksi yang sesuai tiap tahap.
+
+        _CALIB_READ_DELAY_S diberi SEBELUM stability-check tiap tahap mulai
+        mengukur (bukan sesudah) — kalau device sudah diam/stabil dari
+        sebelumnya, _wait_for_stable_window bisa langsung mengembalikan
+        window dalam <0.1s, sebelum user sempat MEMBACA instruksi yang baru
+        saja muncul apalagi mulai menggerakkan kepala. Delay ini murni waktu
+        baca+reaksi, terpisah dari pengukuran stabilitas itu sendiri."""
+        _CALIB_READ_DELAY_S = 1.2
+
+        # ── Tahap 1: neutral ────────────────────────────────────────────
+        time.sleep(_CALIB_READ_DELAY_S)
+        if not self.cursor_control_enabled:
+            return
+        window = self._wait_for_stable_window()
+        if window is None or not self.cursor_control_enabled:
+            return
+        self._imu_baseline = tuple(np.mean(np.array(window), axis=0))
+        self._tilt_ema_up = 0.0
+        self._tilt_ema_right = 0.0
+        print(f"🎯  Baseline netral direkam — {self._imu_baseline}")
+
+        # ── Tahap 2: tilt kanan ──────────────────────────────────────────
+        self.cursor_calib_phase = "right"
+        time.sleep(_CALIB_READ_DELAY_S)
+        if not self.cursor_control_enabled:
+            return
+        window = self._wait_for_stable_window()
+        if window is None or not self.cursor_control_enabled:
+            return
+        avg = np.mean(np.array(window), axis=0)
+        dev = avg - np.array(self._imu_baseline)
+        dev_norm = np.linalg.norm(dev)
+        if dev_norm > 1e-3:
+            self._calib_right_vec = tuple(dev / dev_norm)
+        else:
+            # User tidak benar-benar tilt (dev nyaris nol) — fallback ke
+            # asumsi X axis supaya tidak division-by-zero, tapi ini kasus
+            # langka (kalibrasi gagal dipatuhi, bukan gagal deteksi).
+            self._calib_right_vec = (1.0, 0.0, 0.0)
+        print(f"➡️   Kalibrasi kanan direkam — dev={tuple(round(v,3) for v in dev)}")
+
+        # ── Tahap 3: tilt atas (mendongak) ────────────────────────────────
+        self.cursor_calib_phase = "up"
+        time.sleep(_CALIB_READ_DELAY_S)
+        if not self.cursor_control_enabled:
+            return
+        window = self._wait_for_stable_window()
+        if window is None or not self.cursor_control_enabled:
+            return
+        avg = np.mean(np.array(window), axis=0)
+        dev = avg - np.array(self._imu_baseline)
+        dev_norm = np.linalg.norm(dev)
+        if dev_norm > 1e-3:
+            raw_up_vec = dev / dev_norm
+        else:
+            raw_up_vec = np.array([0.0, 1.0, 0.0])
+        print(f"⬆️   Kalibrasi atas direkam (mentah) — dev={tuple(round(v,3) for v in dev)}")
+
+        # Gram-Schmidt: paksa up_vec tegak lurus terhadap right_vec.
+        # Secara anatomis nyaris mustahil tilt kepala murni ke kanan TANPA
+        # sedikit ikut naik/turun (atau sebaliknya) — jadi 2 vektor kalibrasi
+        # mentah hampir pasti tidak persis 90° satu sama lain. Kalau
+        # dipakai apa adanya, gerakan MURNI ke kanan akan ikut menghasilkan
+        # sinyal tilt_up (dan sebaliknya) sebesar cos(sudut_penyimpangan) —
+        # ini yang menyebabkan gejala "gerak kanan/kiri jadi ikut naik/turun".
+        # Buang komponen raw_up_vec yang sejajar right_vec, sisakan hanya
+        # yang benar-benar ortogonal, baru re-normalize.
+        right_arr = np.array(self._calib_right_vec)
+        up_orthogonal = raw_up_vec - np.dot(raw_up_vec, right_arr) * right_arr
+        up_norm = np.linalg.norm(up_orthogonal)
+        if up_norm > 1e-3:
+            self._calib_up_vec = tuple(up_orthogonal / up_norm)
+        else:
+            # raw_up_vec nyaris sejajar right_vec (user mungkin tidak benar2
+            # tilt ke atas, atau tilt ke arah yang sama dengan kalibrasi kanan)
+            # — fallback: tetap pakai raw (lebih baik daripada division by zero,
+            # meski kemungkinan cross-talk masih ada di kasus langka ini).
+            self._calib_up_vec = tuple(raw_up_vec)
+            print("⚠️  Kalibrasi atas nyaris sejajar dengan kalibrasi kanan — "
+                  "cross-talk mungkin masih terasa, ulangi kalibrasi jika perlu")
+        print(f"⬆️   Kalibrasi atas (setelah ortogonalisasi) — {tuple(round(v,3) for v in self._calib_up_vec)}")
+
+        self.cursor_calib_phase = "ready"
+        self._cursor_baseline_ready = True
+        print("✅  Kalibrasi cursor control selesai — siap dipakai")
+
     def disconnect(self) -> None:
         """Disconnect Muse 2 and kill the muselsl subprocess."""
         self.running = False
         self._cancel.set()
+        self._imu_thread_stop.set()
         self._kill_proc()
         self._history    = {"alpha": [], "beta": [], "theta": [], "tbr": [],
                             "frontal_alpha": [], "frontal_theta": []}
@@ -312,6 +501,25 @@ class MuseConnector:
         self._thr_wink         = 800.0
         self._thr_eyebrow      = 300.0
         self._thr_jaw          = 520.0
+        # Safety: matikan cursor control total saat disconnect — tidak boleh
+        # ada sesi yang meninggalkan cursor OS bergerak sendiri.
+        # cursor_control_enabled = False DULU (sebelum reset lain) — thread
+        # _run_cursor_calibration mengecek flag ini di while-loop-nya (lewat
+        # _wait_for_stable_window) dan keluar sendiri dalam
+        # <=_STABILITY_POLL_S detik, tidak perlu dibatalkan manual (ini plain
+        # Thread, bukan Timer, tidak punya .cancel()).
+        self.cursor_control_enabled = False
+        self._cursor_baseline_ready = False
+        self.cursor_calib_phase = "idle"
+        self._calib_right_vec = None
+        self._calib_up_vec = None
+        self._recenter_timer = None
+        self.cursor_velocity_x = 0.0
+        self.cursor_velocity_y = 0.0
+        self._imu_baseline    = (0.0, 0.0, 1.0)
+        self._tilt_ema_up     = 0.0
+        self._tilt_ema_right  = 0.0
+        self._acc_recent      = []
         self.composer.reset()
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
@@ -394,7 +602,7 @@ class MuseConnector:
         script = (
             "from muselsl import stream; "
             f"stream(address='{mac_address}', ppg_enabled=True, "
-            "acc_enabled=False, gyro_enabled=False)"
+            "acc_enabled=True, gyro_enabled=True)"
         )
         self._stream_proc = subprocess.Popen(
             [sys.executable, "-c", script],
@@ -422,20 +630,49 @@ class MuseConnector:
         if not eeg_streams:
             raise Exception("EEG LSL stream not found — Muse 2 did not connect within 25 s")
 
-        ppg_streams = resolve_byprop("type", "PPG", timeout=3.0)
+        ppg_streams  = resolve_byprop("type", "PPG",  timeout=3.0)
+        acc_streams  = resolve_byprop("type", "ACC",  timeout=3.0)
+        gyro_streams = resolve_byprop("type", "GYRO", timeout=3.0)
 
         eeg_inlet = StreamInlet(eeg_streams[0], max_buflen=30, max_chunklen=0)
         ppg_inlet = StreamInlet(ppg_streams[0], max_buflen=60, max_chunklen=0) if ppg_streams else None
+        # ACC/GYRO @ ~52Hz — hanya butuh sample TERBARU tiap tick (lihat _loop),
+        # bukan window besar seperti EEG, jadi buffer kecil cukup.
+        acc_inlet  = StreamInlet(acc_streams[0],  max_buflen=5, max_chunklen=0) if acc_streams  else None
+        gyro_inlet = StreamInlet(gyro_streams[0], max_buflen=5, max_chunklen=0) if gyro_streams else None
 
         if ppg_inlet:
             print("📡  PPG LSL stream found — HR enabled!")
         else:
             print("⚠️  PPG stream not found — HR disabled")
 
+        if acc_inlet and gyro_inlet:
+            print("🕹️   ACC + GYRO LSL streams found — cursor control available!")
+        else:
+            print("⚠️  ACC/GYRO stream not found — cursor control disabled this session")
+
         self.running = True
         self._connected_at = time.time()
         self._set_status("connected")
         print("✅  Muse 2 connected via muselsl!")
+
+        # IMU (ACC/GYRO) dibaca di thread TERPISAH dari _loop utama supaya
+        # cursor control terasa responsif — _loop EEG sengaja lambat (~150ms,
+        # dibutuhkan utk resolusi Welch PSD), tapi accelerometer Muse 2
+        # sebenarnya mengirim data ~52x/detik. Kalau cursor velocity hanya
+        # di-update tiap 150ms, gerakan terasa lamat/tersendat walau
+        # mouse_connector sendiri menggerakkan cursor di 60Hz — nilai
+        # velocity-nya statis selama 150ms itu. Thread ini jalan ~50Hz,
+        # mendekati native rate sensor, independen dari EEG.
+        self._imu_thread_stop = threading.Event()
+        if acc_inlet and gyro_inlet:
+            self._imu_thread = threading.Thread(
+                target=self._imu_loop, args=(acc_inlet, gyro_inlet), daemon=True
+            )
+            self._imu_thread.start()
+        else:
+            self._imu_thread = None
+
         self._loop(eeg_inlet, ppg_inlet)
 
     def _read_err_log(self) -> str:
@@ -454,6 +691,36 @@ class MuseConnector:
             return content[-300:] if content else ""
         except Exception:
             return ""
+
+    def _imu_loop(self, acc_inlet, gyro_inlet) -> None:
+        """Thread terpisah, ~50Hz — baca ACC/GYRO dan update cursor velocity
+        jauh lebih sering daripada tick EEG (~6.7Hz), supaya kontrol cursor
+        terasa real-time. Channel order muselsl: X,Y,Z. Unit: ACC=g, GYRO=dps."""
+        IMU_DT = 1.0 / 50.0
+        while self.running and not self._imu_thread_stop.is_set():
+            t0 = time.time()
+            try:
+                acc_chunk, _ = acc_inlet.pull_chunk(timeout=0.0, max_samples=32)
+            except Exception:
+                acc_chunk = []
+            if acc_chunk:
+                self._latest_acc = acc_chunk[-1]
+                self._acc_recent.append(acc_chunk[-1])
+                if len(self._acc_recent) > 8:
+                    self._acc_recent.pop(0)
+
+            try:
+                gyro_chunk, _ = gyro_inlet.pull_chunk(timeout=0.0, max_samples=32)
+            except Exception:
+                gyro_chunk = []
+            if gyro_chunk:
+                self._latest_gyro = gyro_chunk[-1]
+
+            if self.cursor_control_enabled:
+                self._update_cursor_control()
+
+            elapsed = time.time() - t0
+            time.sleep(max(0.0, IMU_DT - elapsed))
 
     def _loop(self, eeg_inlet, ppg_inlet) -> None:
         EEG_MAX = SAMPLE_RATE * 10  # 10 s circular buffer, 4 ch
@@ -1156,6 +1423,7 @@ class MuseConnector:
                     print(f"⚠️  Loop error: {e}")
 
         # Loop ended — clean up
+        self._imu_thread_stop.set()
         _csv_file.close()
         print(f"📊  Session log disimpan: {_csv_path}")
         err = self._read_err_log()
@@ -1164,6 +1432,158 @@ class MuseConnector:
         self._kill_proc()
         if self.status == "connected":
             self._set_status("disconnected")
+
+    # ── Cursor Control (head-tilt joystick) ─────────────────────────────────
+
+    # Konstanta cursor control — dituning empiris saat testing di headset asli.
+    _TILT_EMA_ALPHA        = 0.55    # smoothing tilt angle — dinaikkan dari 0.35
+                                      # supaya cursor lebih responsif (kurang lag),
+                                      # masih cukup redam jitter BLE sesaat.
+    _TILT_DEADZONE         = 0.025   # ~1.5° tilt — cukup kecil supaya gerakan
+                                      # kepala ringan langsung terasa, tapi masih
+                                      # menahan noise diam (accel Muse 2 quantized).
+    _TILT_MAX              = 0.22    # tilt penuh dicapai pada sudut lebih kecil
+                                      # dari sebelumnya (0.35) — mouse-like berarti
+                                      # sedikit tilt = respons besar, bukan perlu
+                                      # memiringkan kepala jauh untuk speed maksimum.
+    _CURSOR_MAX_SPEED      = 2200.0  # px/detik pada tilt maksimum — dinaikkan
+                                      # signifikan dari 900 supaya terasa senormal
+                                      # menggerakkan mouse fisik, bukan merayap.
+    _CURVE_EXPONENT        = 1.3     # kurva lebih landai dari 1.6 — speed naik
+                                      # lebih cepat begitu keluar dead-zone,
+                                      # tetap ada sedikit ruang presisi di awal.
+    _GYRO_GATE_DPS         = 120.0   # di atas ini, accel dianggap terkontaminasi gerak cepat
+
+    # Axis mapping Muse 2 → roll (kiri-kanan) / pitch (atas-bawah).
+    #
+    # Dua percobaan sebelumnya gagal karena sama-sama menebak axis:
+    # 1. Proyeksi Gram-Schmidt generik (baseline-relative, tanpa asumsi axis
+    #    fisik) — matematisnya solid tapi basis 'right'/'up' yang dihasilkan
+    #    tidak terikat konsisten ke gerakan fisik kepala, tergantung arah
+    #    baseline. Roll "bocor" ke pitch, magnitude jadi lemah/salah arah.
+    # 2. Index axis fisik statis (X=roll, Y=pitch, tebakan dari asumsi umum
+    #    "headband horizontal") — data nyata (log user) membuktikan asumsi
+    #    ini salah: X punya std 3x lebih besar dari Y dan berkorelasi 0.625
+    #    dengan Y, artinya axis fisik chip TIDAK sejajar murni dengan
+    #    roll/pitch anatomis pada pemakaian headset ini — kemungkinan headset
+    #    terpasang agak miring, atau chip IMU tidak presisi horizontal di
+    #    dalam headband.
+    #
+    # Solusi final: KALIBRASI ARAH EKSPLISIT (_run_cursor_calibration di atas)
+    # — user diminta tilt kanan lalu atas secara nyata, sistem mengukur
+    # vektor deviasi accel yang SESUNGGUHNYA terjadi sebagai basis right/up.
+    # Tidak ada tebakan axis/sign sama sekali — basis ini benar untuk
+    # orientasi headset apapun, karena diukur langsung dari gerakan nyata.
+
+    def _tilt_from_baseline(self, acc: tuple, baseline: tuple):
+        """Proyeksi deviasi accel (relatif baseline netral) ke basis
+        right/up hasil KALIBRASI NYATA (_calib_right_vec/_calib_up_vec),
+        bukan index axis atau proyeksi geometris generik. Basis ini diukur
+        langsung dari gerakan tilt user sendiri saat kalibrasi, sehingga
+        otomatis benar untuk orientasi headset apapun."""
+        dev = np.array(acc) - np.array(baseline)
+        right_vec = np.array(self._calib_right_vec)
+        up_vec    = np.array(self._calib_up_vec)
+        tilt_right = float(np.dot(dev, right_vec))
+        tilt_up    = float(np.dot(dev, up_vec))
+        return tilt_up, tilt_right
+
+    def _tilt_to_speed(self, tilt: float) -> float:
+        """Dead-zone + kurva eksponensial gentle (bukan linear/kuadratik penuh)
+        dari tilt angle ke velocity. Exponent ~1.3 memberi fine-control dekat
+        netral (presisi klik target kecil) sambil tetap capai speed maksimum
+        penuh saat tilt besar — sweet spot yang sama dipakai kurva analog
+        stick game controller.
+
+        CATATAN: sempat dicoba hysteresis anti-overshoot (dead-zone melebar
+        2.5x saat magnitude menurun menuju netral) untuk meredam overshoot
+        kecil manusiawi saat kepala kembali ke posisi netral. DIBUANG —
+        terbukti dari testing nyata itu membuat cursor berhenti merespons
+        terlalu dini (sebelum benar-benar sampai netral) dan bisa 'macet' di
+        mode dead-zone lebar untuk waktu lama kalau ada sedikit goyangan
+        balik. Trade-off itu lebih buruk daripada overshoot singkat (~1-2
+        tick, ~20-40ms) yang coba diatasi. Kembali ke perhitungan sederhana:
+        speed murni fungsi dari sudut tilt SAAT INI, tidak ada riwayat."""
+        mag = abs(tilt)
+        if mag < self._TILT_DEADZONE:
+            return 0.0
+        t = min((mag - self._TILT_DEADZONE) / (self._TILT_MAX - self._TILT_DEADZONE), 1.0)
+        speed = (t ** self._CURVE_EXPONENT) * self._CURSOR_MAX_SPEED
+        return speed if tilt > 0 else -speed
+
+    def _update_cursor_control(self) -> None:
+        """Dipanggil tiap tick _imu_loop (~50Hz) saat cursor_control_enabled.
+        Hitung tilt dari accel (baseline-relative), gate pakai gyro (motion
+        artifact), smoothing EMA, lalu map ke velocity px/detik."""
+        if not self._cursor_baseline_ready:
+            # Masih dalam proses kalibrasi 3-tahap (lihat
+            # _run_cursor_calibration) — baseline/basis right-up belum valid,
+            # cursor harus diam total, bukan bergerak berdasar data lama/default.
+            self.cursor_velocity_x = 0.0
+            self.cursor_velocity_y = 0.0
+            return
+
+        gx, gy, gz = self._latest_gyro
+        gyro_mag = (gx ** 2 + gy ** 2 + gz ** 2) ** 0.5
+
+        if gyro_mag > self._GYRO_GATE_DPS:
+            # Kepala bergerak cepat (bukan tilt statis) — accel terkontaminasi
+            # akselerasi linear sesaat, bukan murni vektor gravitasi. Tahan
+            # nilai tilt EMA sebelumnya daripada ikut lonjakan palsu.
+            pass
+        else:
+            tilt_up, tilt_right = self._tilt_from_baseline(self._latest_acc, self._imu_baseline)
+            self._tilt_ema_up    = (self._tilt_ema_up    * (1 - self._TILT_EMA_ALPHA)
+                                     + tilt_up    * self._TILT_EMA_ALPHA)
+            self._tilt_ema_right = (self._tilt_ema_right * (1 - self._TILT_EMA_ALPHA)
+                                     + tilt_right * self._TILT_EMA_ALPHA)
+
+            # Baseline drift correction DIHAPUS TOTAL — dua percobaan sama-sama
+            # gagal:
+            # 1. Dicek via "abs(tilt) < DEADZONE" — catch-22 kalau baseline
+            #    sendiri sudah salah jauh (tilt selalu di luar deadzone
+            #    terhadap baseline salah, koreksi tak pernah jalan).
+            # 2. Dicek via variance accel jangka pendek (~0.4s @ 50Hz) — TIDAK
+            #    bisa membedakan "kepala genuinely netral" dari "kepala diam
+            #    MENAHAN tilt tertentu" (mis. user sengaja menahan cursor
+            #    bergerak ke satu arah lama) — keduanya sama-sama variance
+            #    rendah. Log nyata membuktikan: baseline X mengembara dari
+            #    +0.478 ke -0.6 (drift 1.09g!) sepanjang satu sesi, karena
+            #    tiap kali user menahan tilt, sistem salah kira itu "netral
+            #    baru" dan mengejarnya — akibatnya baseline TIDAK PERNAH
+            #    stabil, dan gejalanya sama seperti tanpa correction sama
+            #    sekali (target netral yang bergerak-gerak terasa exactly
+            #    seperti cursor "hanyut" ke arah tertentu terus).
+            # Baseline sekarang HANYA direkam sekali di kalibrasi awal
+            # (_run_cursor_calibration) dan tidak pernah berubah otomatis
+            # selama sesi. Kalau baseline melenceng karena postur berubah,
+            # solusi = toggle OFF lalu ON lagi (re-kalibrasi manual), bukan
+            # auto-correction yang justru menambah masalah.
+
+        # Konversi tilt → screen-space velocity. Layar: y kecil = atas, y
+        # besar = bawah. tilt_up positif (kepala mendongak — arah "up" hasil
+        # kalibrasi nyata di _run_cursor_calibration) harus menggerakkan
+        # cursor ke ATAS → vy negatif.
+        vx = self._tilt_to_speed(self._tilt_ema_right)
+        vy = -self._tilt_to_speed(self._tilt_ema_up)
+
+        # Diagnostik sementara — dicetak ~2x/detik (bukan tiap tick ~50Hz,
+        # supaya terminal tidak banjir). Dipakai untuk debug axis mapping
+        # bersama user secara langsung dari data nyata, bukan tebakan.
+        self._cursor_dbg_tick = getattr(self, "_cursor_dbg_tick", 0) + 1
+        if self._cursor_dbg_tick % 25 == 0:
+            print(f"  [CURSOR] acc={tuple(round(v,3) for v in self._latest_acc)} "
+                  f"baseline={tuple(round(v,3) for v in self._imu_baseline)} "
+                  f"tilt_ema(up,right)=({self._tilt_ema_up:+.3f},{self._tilt_ema_right:+.3f}) "
+                  f"v=({vx:+.0f},{vy:+.0f})")
+
+        self.cursor_velocity_x = vx
+        self.cursor_velocity_y = vy
+        if self.on_cursor_velocity:
+            try:
+                self.on_cursor_velocity(vx, vy)
+            except Exception as e:
+                print(f"⚠️  on_cursor_velocity error: {e}")
 
     # ── Heart rate ────────────────────────────────────────────────────────
 
