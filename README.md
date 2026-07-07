@@ -28,6 +28,9 @@ Flask-SocketIO (port 8765)
     ↓  /                        → BrainWave Monitor overlay (OBS Browser Source)
     ↓  /overlay/mental-command  → Mental Command Playground (5-command demo overlay)
     ↓  wink_left / wink_right / jaw_clench / eyebrow_raise / double_jaw events → full-screen visual FX per command
+Cursor Control Mode (optional, toggle in UI)
+    ↓  Muse 2 accelerometer/gyroscope — head-tilt joystick moves the OS mouse cursor
+    ↓  jaw clench re-purposed as left-click while this mode is ON (scene switching disabled)
 ```
 
 ---
@@ -65,6 +68,30 @@ Five distinct gestures trigger a full-screen visual FX overlay at `/overlay/ment
 To test without a Muse: open `/overlay/mental-command` and press **Shift+1** through **Shift+5**.
 
 **Custom keymap**: each command can be remapped to any OS keystroke (including modifier combos like `cmd+r`) from the keymap panel on `/overlay/mental-command` — click a command's key button, then press the combo. Saved to `keymap.json` and sent via `pynput` (`keyboard_connector.py`) whenever that command fires.
+
+### Cursor Control Mode (Head-Tilt Joystick)
+
+An optional mode that repurposes the Muse 2's onboard accelerometer/gyroscope (previously unused) to move the OS mouse cursor by tilting the head, with jaw clench as left-click. Toggled from a button in the main UI — **off by default**, and mutually exclusive with the jaw-clench mental command above:
+
+| Mode | Jaw clench behavior | Head tilt |
+|---|---|---|
+| **OFF** (default) | OBS scene switch + keystroke (unchanged) | No effect |
+| **ON** | Left-click at current cursor position (scene/keystroke suppressed) | Moves the cursor — velocity/joystick style |
+
+**Velocity-based control, not absolute position**: tilt angle maps to cursor *speed* in that direction (dead-zone + gentle exponential curve up to a clamped max speed), not to an absolute screen position. A level head means zero velocity — the cursor simply stops wherever it is, with no drift.
+
+**3-stage explicit calibration on toggle-ON** (`MuseConnector._run_cursor_calibration`), each stage waiting for the accelerometer to prove *stable* (low variance) before advancing, not a fixed timer:
+1. **Neutral** — hold head still → baseline accel vector recorded.
+2. **Right** — tilt head right and hold → deviation from baseline recorded as the "right" axis.
+3. **Up** — tilt head up and hold → deviation from baseline recorded as the "up" axis, then **Gram-Schmidt orthogonalized** against the "right" axis.
+
+Explicit calibration (rather than assuming a fixed accelerometer axis maps to roll/pitch) was necessary because the Muse 2's physical chip orientation inside the headband isn't documented, and real session logs showed one axis capturing a mix of roll+pitch depending on how the headset sits — a hardcoded axis mapping produced weak/wrong-direction movement on one axis. The Gram-Schmidt step was added after logs showed the two calibrated axes weren't perfectly perpendicular (a person can rarely tilt purely sideways without a little pitch bleeding in), which caused pure left-right movement to visibly leak into up-down cursor motion.
+
+**IMU acquisition runs in its own ~50Hz thread** (`_imu_loop`), separate from the main EEG loop (~6.7Hz, intentionally slow for PSD spectral resolution) — driving cursor velocity at the EEG loop's rate made movement visibly choppy (~7 discrete jumps/sec).
+
+**Baseline does not auto-correct during a session**: an earlier drift-correction mechanism (nudging the baseline toward the current position whenever accelerometer variance looked "stable") was removed after real logs showed it couldn't distinguish "head genuinely neutral" from "head held steady at a deliberate tilt" — both look like low variance. It ended up chasing the last-held tilt as the new "neutral," making the cursor's true center wander continuously. If the baseline drifts from a posture change mid-session, the fix is to toggle the mode off and back on (re-run calibration), not automatic correction.
+
+Safety: toggling ON force-recalibrates every time (no stale baseline carries over), and disconnecting the Muse always force-disables the mode and zeroes cursor velocity.
 
 ### Mental State Detection
 
@@ -156,7 +183,6 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 ```
 
 **UI elements:**
-- **Mute button** — toggles drum output (MIDI CC7 channel volume), header next to Connect
 - **STATE** — CALM / FLOW / TENSE badge with color (green / yellow / purple)
 - **HR** — heart rate from Muse 2 PPG, top-right of state row
 - **Mental command trigger** — appears below HR for 2.5s when a brain signal fires: `Scene 1 by brain signal` (green). Hidden when idle.
@@ -164,6 +190,7 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 - **EEG Channel Map** — SVG head diagram, electrode color = signal quality (green/yellow/red/grey)
 - **Waveform** — rolling θ/α/β canvas with spectral centroid Hz per band
 - **Reconnecting dot** — orange pulsing dot when auto-reconnect is in progress
+- **Footer controls** (below the main card) — **Mute** button (toggles drum output via MIDI CC7 channel volume) and **Cursor Control** button (toggles head-tilt cursor mode, walks through calibration instructions in-place: "hold still" → "tilt right" → "tilt up" → "Cursor: ON", blinking blue while active)
 
 **Mental Command Playground** (`http://localhost:8765/overlay/mental-command`):
 - Full-screen command demo overlay with 5 distinct color schemes per command
@@ -176,11 +203,12 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 
 | Component | Library | Role |
 |---|---|---|
-| EEG Acquisition | muselsl + pylsl | BLE stream from Muse 2 via LSL |
+| EEG Acquisition | muselsl + pylsl | BLE stream from Muse 2 via LSL (EEG + PPG + ACC + GYRO) |
 | Signal Processing | BrainFlow DataFilter | PSD Welch, band power computation |
 | Audio Engine | FluidSynth + pyfluidsynth | Drum rendering via GM Soundfont |
 | Web Server | Flask + Flask-SocketIO | WebSocket bridge Python → Browser |
 | OBS Integration | obsws-python | WebSocket v5 scene switching + recording start/stop toggle |
+| Cursor Control | pynput.mouse | Head-tilt joystick cursor movement + jaw-clench left-click |
 | Overlay UI | HTML/CSS/JS | OBS Browser Source |
 
 **Install dependencies:**
@@ -244,4 +272,5 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | Custom keymap per mental command (modifier combos supported) | ✅ |
 | Mute/unmute drum output (UI button) | ✅ |
 | Auto-reconnect with backoff | ✅ |
+| Cursor Control Mode (head-tilt joystick + jaw-clench click) | ✅ |
 | ML classifier (SVM/LDA) | 🔲 planned |

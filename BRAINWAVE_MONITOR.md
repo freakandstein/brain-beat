@@ -10,14 +10,16 @@ Muse 2 (via muselsl + pylsl) / Simulator
         │
         ▼
   brainflow_connector.py       ← EEG acquisition, EMG rejection, mental command detection
+        │                        + ACC/GYRO acquisition (own ~50Hz thread), cursor tilt math
         │
   eeg_engine.py                ← Brainwave Monitor core: FluidSynth drums-only (GM channel 9)
         │
   eeg_server.py                ← Flask + SocketIO bridge (port 8765)
         │                ↘
-        │           obs_connector.py  ← OBS WebSocket v5 scene switching
+        │           obs_connector.py    ← OBS WebSocket v5 scene switching
+        │           mouse_connector.py  ← Cursor movement/click via pynput.mouse (60Hz mover thread)
         │
-  templates/index.html         ← Web UI "BRAINWAVE MONITOR" (OBS overlay)
+  templates/index.html         ← Web UI "BRAINWAVE MONITOR" (OBS overlay) + Cursor Control toggle
   templates/overlay_mental_command.html ← 5-command mental command overlay (/overlay/mental-command)
 ```
 
@@ -212,6 +214,77 @@ Scene names can be changed in `obs_connector.py` → `DEFAULT_SCENE_MAP`.
 3. Make sure scene names in `DEFAULT_SCENE_MAP` match exactly what's in OBS
 
 Connection is established at startup and auto-reconnects if OBS restarts.
+
+## Cursor Control Mode (Head-Tilt Joystick)
+
+Repurposes the Muse 2's accelerometer + gyroscope (previously acquired with `acc_enabled=False, gyro_enabled=False` — now both `True`) to move the OS mouse cursor via head tilt, with jaw clench as left-click. Off by default; toggled from a button in `templates/index.html`.
+
+### Mutual Exclusion With Jaw Clench
+
+```
+cursor_control_enabled == False (default):
+    jaw clench single-fire → OBS scene switch + keystroke (unchanged)
+    double jaw clench      → OBS recording toggle (unchanged, in BOTH modes)
+
+cursor_control_enabled == True:
+    jaw clench single-fire → mouse_connector.click_left() (scene/keystroke suppressed)
+    double jaw clench      → still OBS recording toggle — NOT gated
+```
+
+Double jaw clench is deliberately left ungated in both modes: it's orthogonal to what single clench does (starting/stopping a recording is a session-level action a user would plausibly want regardless of cursor state), and gating it would remove the only recording toggle exactly while demoing the cursor feature.
+
+The branch lives inside the existing `_jaw_clench_cb` closure in `eeg_server.py` (checked at fire-time via `muse.cursor_control_enabled`), not by swapping which callback is registered on toggle — simpler and avoids a race between a toggle event and an in-flight clench.
+
+### IMU Acquisition — Separate ~50Hz Thread
+
+ACC/GYRO are pulled in `MuseConnector._imu_loop`, a dedicated thread started alongside the main EEG loop, **not** inside it. The main `_loop` intentionally runs at ~6.7Hz (`time.sleep(0.15)`) — that cadence is needed for Welch PSD spectral resolution on EEG, but it's far too slow for cursor control: driving mouse velocity updates at 6.7Hz produces ~7 visible discrete jumps per second, distinctly choppy. `_imu_loop` runs independently at ~50Hz (close to the Muse 2's native ACC/GYRO rate), reading only the *latest* sample each tick (not a windowed buffer like EEG — a real-time control loop wants the freshest reading, not an average that adds lag).
+
+`mouse_connector.py`'s `MouseConnector` then runs its own ~60Hz mover thread, applying `velocity × dt` as a small increment each tick — decoupling "how often we sense" (50Hz IMU) from "how often we move the cursor" (60Hz), since driving movement only at the IMU's own tick rate would still look slightly stepped.
+
+### 3-Stage Explicit Direction Calibration
+
+Toggling the mode ON does **not** immediately activate cursor movement — it starts `MuseConnector._run_cursor_calibration`, which walks through 3 stages, each waiting for the accelerometer to prove *stable* (low variance over a rolling window) before advancing, rather than a fixed timer:
+
+```
+neutral → right → up → ready
+```
+
+1. **neutral** — user holds head still; the stable window's mean accel vector becomes `_imu_baseline`.
+2. **right** — user tilts head right and holds; the *deviation* from baseline (normalized) becomes `_calib_right_vec`.
+3. **up** — user tilts head up and holds; the deviation from baseline becomes a raw "up" vector, which is then **Gram-Schmidt orthogonalized** against `_calib_right_vec` before being stored as `_calib_up_vec`.
+
+`cursor_calib_phase` is broadcast to the UI via `state_update` (and immediately in the `cursor_control_state` response to the toggle event, to avoid a race where the phase-specific instruction text never gets a chance to render before the phase moves on) so the toggle button can show live instructions: "hold still" → "tilt right, hold" → "tilt up, hold" → "Cursor: ON". A `_CALIB_READ_DELAY_S` (1.2s) pause is inserted **before** each stage starts measuring — without it, if the device happened to already be stable from the previous stage, a new stage could pass its stability check before the user even finished reading the new instruction.
+
+**Why explicit calibration, not a hardcoded axis mapping**: two earlier approaches were tried and both failed against real session logs:
+
+1. A generic Gram-Schmidt projection relative to the neutral baseline (no assumption about which physical accelerometer axis is "roll" vs "pitch") — mathematically sound, but the resulting right/up basis wasn't tied consistently to the physical tilt gesture; it depended on which direction the baseline vector happened to point, so roll partially leaked into pitch and vice versa depending on session.
+2. A hardcoded index mapping (`X = roll, Y = pitch`, sign flipped by trial and error) — real logs proved this wrong for this device/headset combination: the X axis showed ~3× the variance of Y and a 0.625 correlation with it, meaning the physical chip axis simply isn't aligned with anatomical roll/pitch the way a Muse 2 datasheet-based guess assumed.
+
+Recording the *actual* deviation vectors from a real right-tilt and a real up-tilt sidesteps needing to know the chip's mounting orientation at all — the calibration is correct for whatever orientation the headset happens to be in.
+
+**Why Gram-Schmidt orthogonalization on top of that**: even with real calibration gestures, the two raw vectors aren't perfectly perpendicular in practice — it's anatomically difficult to tilt purely sideways without a little up/down bleeding in (and vice versa). Testing showed the angle between the two raw calibrated vectors could be off from 90° by a large margin, and that leftover non-orthogonality meant a *pure* rightward head movement still registered a non-trivial `tilt_up` component — the reported symptom was "moving left/right also drifts up/down." Explicitly discarding the component of `raw_up_vec` that's parallel to `_calib_right_vec` (then re-normalizing) forces the two axes to be exactly perpendicular, eliminating that cross-talk regardless of how imprecisely the user performed the calibration gestures.
+
+### Tilt-to-Velocity — What Was Tried and Removed
+
+```python
+tilt_up, tilt_right = dot(accel_deviation, calibrated_up_vec), dot(accel_deviation, calibrated_right_vec)
+speed = (clamp(|tilt| - deadzone, 0, max) / max) ** 1.3 × max_speed   # per axis, sign preserved
+```
+
+- **Dead-zone** (~0.025, ~1.5°) below which speed is forced to zero, to absorb accelerometer quantization noise at rest.
+- **Exponential curve** (exponent 1.3, not linear or full quadratic) between dead-zone and max tilt — gives fine control near center while still reaching full speed without needing an extreme tilt angle.
+- **Gyro-magnitude gate** (>120°/s holds the previous smoothed tilt instead of updating): fast head motion contaminates the accelerometer reading with linear acceleration, not pure gravity, so a sudden gyro spike is treated as "this accel sample is unreliable this tick," not as a real tilt change.
+
+Two additional mechanisms were tried and **removed** after real-device testing surfaced worse problems than they solved:
+
+- **Baseline drift correction** — nudged `_imu_baseline` toward the current accel reading whenever a short-window variance check looked "stable," meant to slowly correct for postural drift across a long session. Removed because the variance check couldn't distinguish "head genuinely neutral" from "head held steady at a deliberately-sustained tilt" (both have low short-term variance) — real logs showed the baseline wandering by over 1g across a single session as it kept chasing whatever position the user happened to hold the cursor at, making "neutral" a moving target and producing exactly the symptom it was meant to prevent (cursor drifting toward one corner).
+- **Hysteresis anti-overshoot** — widened the effective dead-zone whenever tilt magnitude was decreasing (returning toward neutral), meant to absorb the small natural overshoot when a person's head passes slightly past center on the way back. Removed because it made the cursor stop responding *before* the head actually reached neutral, and because the "peak" tracking used to decide when to shrink the dead-zone back down didn't decay, so a small natural wobble while trying to settle at neutral could leave the cursor stuck in the widened dead-zone for an extended period — reported as "cursor gets stuck; hard to move it back after hitting one direction." Reverting to a pure per-tick calculation (no history) traded a short, predictable overshoot (~1-2 ticks, ~20-40ms) for eliminating that stuck state entirely.
+
+### Safety
+
+- Toggling ON always re-runs the full 3-stage calibration — no stale baseline/calibration vectors carry over from a previous session.
+- Disconnecting the Muse (`MuseConnector.disconnect()`) force-sets `cursor_control_enabled = False` and zeroes velocity — no session can leave the OS cursor drifting after a drop.
+- The UI toggle button blinks blue while active — an explicit, hard-to-miss visual indicator, since this feature moves the real system-wide cursor.
 
 ## Web UI
 
