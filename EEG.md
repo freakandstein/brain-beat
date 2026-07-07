@@ -24,7 +24,8 @@
 | **Adaptive EMG threshold per-sesi** | ✅ Selesai | 15 detik pertama ukur baseline noise frontal+temporal → thr_eyebrow/wink/jaw dihitung otomatis via median×multiplier, clamp ke range aman |
 | **Global mutex antar detector** | ✅ Selesai | `_last_cmd_time` + `_cmd_idle` (1.5s window) — satu command fire → semua detector diblokir, dua arah, dihitung sekali per tick sebelum semua detektor jalan |
 | **Auto-reconnect** | ✅ Selesai | Jika koneksi Muse putus, retry otomatis dengan backoff 3s→5s→10s→15s, status reconnecting di UI |
-| **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz |
+| **Muse 2 BLE acquisition** | ✅ Selesai | muselsl subprocess + pylsl, EEG 256Hz + PPG 64Hz + ACC/GYRO ~52Hz (dibaca thread terpisah ~50Hz untuk cursor control) |
+| **Cursor Control Mode** | ✅ Selesai | Head-tilt joystick pakai accelerometer/gyroscope Muse 2 — kalibrasi arah eksplisit 3-tahap (neutral/kanan/atas) + ortogonalisasi Gram-Schmidt, jaw clench jadi left-click saat mode ON (mutual exclusion dengan scene switch), double jaw tetap toggle recording di kedua mode. Detail lengkap di BRAINWAVE_MONITOR.md |
 | **Heart Rate (PPG)** | ✅ Selesai | Peak-detection dari IR channel PPG, update setiap 5 detik |
 | **Channel quality filter** | ✅ Selesai | Channel poor di-skip dari band power computation |
 | **Spektral Hz display** | ✅ Selesai | Spectral centroid per band ditampilkan di UI dalam Hz |
@@ -45,7 +46,7 @@
 | **Channel EEG** | 4 channel (TP9, AF7, AF8, TP10) |
 | **Sample Rate** | 256 Hz |
 | **Tipe Elektroda** | Dry electrode (tanpa gel) |
-| **Sensor tambahan** | PPG (heart rate), accelerometer, gyroscope |
+| **Sensor tambahan** | PPG (heart rate) — dipakai untuk HR; accelerometer + gyroscope — dipakai untuk Cursor Control Mode (head-tilt joystick) |
 | **Konektivitas** | Bluetooth Low Energy |
 | **Akses Raw EEG** | ✅ Via muselsl (subprocess) + pylsl (LSL inlet) |
 
@@ -304,6 +305,7 @@ Tiap sesi mencakup fase berikut secara bergantian:
 | **Fase 4d** | ✅ Selesai | Wink dipecah jadi wink left / wink right (Command A1/A2) — `_wink_eye` menentukan `on_wink_left` vs `on_wink_right`, masing-masing overlay color & OBS scene sendiri |
 | **Fase 4e** | ✅ Selesai | Double jaw clench → hotkey OBS recording start/stop (`toggle_record()`) |
 | **Fase 4f** | ✅ Selesai | Tuning akurasi wink/eyebrow dari real-session log — wink unilateral range 10–300µV → 1–400µV, eyebrow sustained 3-tick-strict → 2-tick → 3-tick + toleransi 1 tick noise, `DECIDE_DELAY` jaw di-tuning 1.0s → 0.6s → 1.5s (final, prioritaskan reliability) |
+| **Fase 4g** | ✅ Selesai | Cursor Control Mode — aktifkan ACC/GYRO Muse 2 (thread akuisisi terpisah ~50Hz), kalibrasi arah eksplisit 3-tahap + ortogonalisasi Gram-Schmidt (bukan axis mapping statis, terbukti salah dari log nyata), jaw clench jadi left-click saat mode ON. Drift-correction baseline dan hysteresis anti-overshoot sempat dicoba, keduanya dibuang setelah testing nyata menunjukkan masalah lebih besar dari yang diselesaikan — detail lengkap di BRAINWAVE_MONITOR.md |
 | **Fase 5** | 🔲 Next | Rekam dataset personal 3–7 sesi, train ML classifier (SVM/LDA) sebagai upgrade dari threshold |
 | **Fase 6** | 🔲 Planned | Integrasi active command ke gameplay nyata — disesuaikan dengan game yang dimainkan |
 
