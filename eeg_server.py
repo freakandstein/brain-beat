@@ -19,9 +19,11 @@ PORT = 8765
 
 from obs_connector import OBSConnector
 from keyboard_connector import KeyboardConnector
+from mouse_connector import MouseConnector
 
 obs_connector = OBSConnector(password="OmU3IAuGtlNcUPUY")
 keyboard_connector = KeyboardConnector()
+mouse_connector = MouseConnector()
 
 
 def _kill_existing():
@@ -132,6 +134,37 @@ def on_set_mute(data):
         socketio.emit("mute_state", {"muted": muted})
 
 
+@socketio.on("get_cursor_control")
+def on_get_cursor_control():
+    if muse:
+        socketio.emit("cursor_control_state", {
+            "enabled": muse.cursor_control_enabled,
+            "phase":   muse.cursor_calib_phase,
+        })
+
+
+@socketio.on("set_cursor_control")
+def on_set_cursor_control(data):
+    if not muse:
+        return
+    enabled = bool(data.get("enabled"))
+    muse.set_cursor_control(enabled)
+    if enabled:
+        mouse_connector.start()
+    else:
+        mouse_connector.stop()
+    # Kirim phase SEKARANG JUGA (bukan cuma enabled) — client sebelumnya
+    # menunggu broadcast state_update berikutnya (~100ms, atau lebih lambat
+    # kalau kalibrasi di backend sudah lompat ke tahap berikutnya duluan)
+    # untuk tahu instruksi tahap kalibrasi apa yang harus ditampilkan,
+    # sehingga instruksi "tahan diam"/"tilt kanan" kadang tidak sempat
+    # terlihat sama sekali saat kalibrasi berjalan cepat.
+    socketio.emit("cursor_control_state", {
+        "enabled": enabled,
+        "phase":   muse.cursor_calib_phase,
+    })
+
+
 @socketio.on("muse_connect")
 def on_muse_connect(data):
     global muse
@@ -219,6 +252,11 @@ def _background_updater():
                         "muse":  muse.status if muse else "unavailable",
                         "heart_rate": muse.heart_rate if muse else None,
                         "channel_quality": muse.channel_quality if muse else None,
+                        "cursor_control": muse.cursor_control_enabled if muse else False,
+                        "cursor_baseline_ready": muse._cursor_baseline_ready if muse else False,
+                        "cursor_calib_phase": muse.cursor_calib_phase if muse else "idle",
+                        "cursor_vx": round(muse.cursor_velocity_x, 1) if muse else 0.0,
+                        "cursor_vy": round(muse.cursor_velocity_y, 1) if muse else 0.0,
                     }
                 socketio.emit("state_update", payload)
         except Exception as e:
@@ -251,6 +289,10 @@ def main():
             elif status in ("disconnected", "error") and engine:
                 engine.stop()
                 engine.set_eeg(alpha=0.70, beta=0.20, theta=0.20, tbr=0.60)
+                # Safety: Muse putus → paksa matikan cursor control, jangan
+                # biarkan cursor OS terus bergerak dari state basi.
+                mouse_connector.stop()
+                socketio.emit("cursor_control_state", {"enabled": False})
 
         def _eyebrow_cb():
             print("⚡  Eyebrow raise detected — triggering overlay")
@@ -271,10 +313,18 @@ def main():
             keyboard_connector.press("wink_right")
 
         def _jaw_clench_cb():
-            print("🦷  Jaw clench detected — triggering overlay")
-            socketio.emit("jaw_clench", {})
-            obs_connector.switch_scene("jaw_clench")
-            keyboard_connector.press("jaw_clench")
+            if muse.cursor_control_enabled:
+                # Cursor Control Mode aktif → jaw clench = left-click, BUKAN
+                # OBS scene switch/keystroke. Mutual exclusion: saat mode ini
+                # ON, fungsi jaw clench yang lama sengaja tidak dijalankan.
+                print("🖱️  Jaw clench → left-click (cursor control mode)")
+                socketio.emit("cursor_left_click", {})
+                mouse_connector.click_left()
+            else:
+                print("🦷  Jaw clench detected — triggering overlay")
+                socketio.emit("jaw_clench", {})
+                obs_connector.switch_scene("jaw_clench")
+                keyboard_connector.press("jaw_clench")
 
         def _double_jaw_cb():
             print("🦷🦷  Double jaw detected — triggering overlay")
@@ -293,6 +343,7 @@ def main():
         muse.on_wink_right               = _wink_right_cb
         muse.composer.on_jaw_clench      = _jaw_clench_cb
         muse.composer.on_double_jaw      = _double_jaw_cb
+        muse.on_cursor_velocity          = mouse_connector.set_velocity
         # Catatan: eyes_closed_relax tidak lagi dipakai playground (diganti
         # eyebrow_raise — gesture cepat & deliberate, lebih konsisten dgn
         # double-blink & jaw clench dibanding "merem-relaks 2 detik" yg

@@ -115,6 +115,34 @@ body {
     background: #2e1a1a;
 }
 #mute-btn.muted:hover { background: #3a2222; }
+#cursor-btn {
+    font-family: 'Courier New', monospace;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--accent);
+    color: var(--dim);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+#cursor-btn:hover { border-color: var(--text); color: var(--text); }
+#cursor-btn.active {
+    color: #38bdf8;
+    border-color: #38bdf8;
+    background: #16232e;
+    animation: blink 1.4s infinite;
+}
+#cursor-btn.active:hover { background: #1c2e3a; }
+.footer-controls {
+    display: flex;
+    justify-content: flex-start;
+    gap: 6px;
+    margin-top: 10px;
+}
 .bci-device-list {
     display: flex;
     flex-direction: column;
@@ -429,7 +457,6 @@ body {
         FluidSynth &nbsp;·&nbsp; Generative &nbsp;·&nbsp; Realtime
       </div>
       <div class="bci-wrap">
-        <button id="mute-btn" onclick="muteBtnClick()">&#x1F50A; Mute</button>
         <button id="bci-btn" onclick="bciBtnClick()">&#x1F50D; Connect</button>
         <div class="bci-device-list" id="bci-device-list"></div>
       </div>
@@ -577,6 +604,11 @@ body {
 
   </div>
 
+  <!-- Footer controls -->
+  <div class="footer-controls">
+    <button id="mute-btn" onclick="muteBtnClick()">&#x1F50A; Mute</button>
+    <button id="cursor-btn" onclick="cursorBtnClick()">&#x1F5B1; Cursor: OFF</button>
+  </div>
 
 </div><!-- /container -->
 
@@ -617,7 +649,46 @@ socket.on('mute_state', (d) => {
 
 socket.on('connect', () => socket.emit('get_mute'));
 
+// ── Cursor Control Mode ──────────────────────────────────────────────────
+// Kalibrasi 3-tahap dijalankan server (lihat MuseConnector._run_cursor_
+// calibration): neutral (tahan diam) → right (tilt kanan, tahan) → up
+// (tilt atas/mendongak, tahan) → ready. Tiap tahap tunggu accel STABIL,
+// bukan delay tetap — durasi variabel, biasanya <1s per tahap. Tombol
+// menampilkan instruksi sesuai cursor_calib_phase yang di-broadcast server.
+const CALIB_INSTRUCTIONS = {
+  idle:    '&#x1F5B1; Cursor: OFF',
+  neutral: '&#x23F3; Tahan kepala diam...',
+  right:   '&#x27A1;&#xFE0F; Tilt kepala ke KANAN, tahan...',
+  up:      '&#x2B06;&#xFE0F; Tilt kepala ke ATAS, tahan...',
+  ready:   '&#x1F3AF; Cursor: ON',
+};
+let cursorControlEnabled = false;
+let cursorCalibPhase     = 'idle';
+
+function renderCursorBtn() {
+  const btn = document.getElementById('cursor-btn');
+  btn.innerHTML = CALIB_INSTRUCTIONS[cursorCalibPhase] || CALIB_INSTRUCTIONS.idle;
+  btn.classList.toggle('active', cursorCalibPhase !== 'idle');
+}
+
+function cursorBtnClick() {
+  socket.emit('set_cursor_control', { enabled: !cursorControlEnabled });
+}
+
+socket.on('cursor_control_state', (d) => {
+  cursorControlEnabled = !!d.enabled;
+  cursorCalibPhase = d.phase || (cursorControlEnabled ? 'neutral' : 'idle');
+  renderCursorBtn();
+});
+
+socket.on('connect', () => socket.emit('get_cursor_control'));
+
 socket.on('state_update', (d) => {
+  if (d.cursor_calib_phase && d.cursor_calib_phase !== cursorCalibPhase) {
+    cursorCalibPhase = d.cursor_calib_phase;
+    renderCursorBtn();
+  }
+
   const sp = d.spectrum_pos ?? 0.2;
 
   let displayState, color, desc;
