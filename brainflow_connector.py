@@ -238,6 +238,42 @@ class MuseConnector:
         self._jaw_strong_streak: int = 0
         self._jaw_released: bool = True   # True jika rahang sudah lepas (siap menerima clench edge baru)
         self._last_cmd_time: float = 0.0    # timestamp command apapun terakhir fire — global mutex antar detector
+
+        # ── Head tilt (roll) command: tilt_left / tilt_right ────────────────
+        # Gerakan MIRINGKAN kepala (telinga mendekat bahu) — bukan menoleh.
+        # Hanya aktif saat Cursor Control Mode OFF (mutually exclusive —
+        # cursor mode sudah memakai tilt kontinu sebagai joystick, jadi
+        # command diskrit di sini sengaja tidak dijalankan bersamaan supaya
+        # tidak dobel-fire saat user memang sedang menggerakkan cursor).
+        # Kalibrasi 1-sumbu MANDIRI (bukan _calib_right_vec milik cursor
+        # control) — dipicu otomatis sesaat setelah connect, independen dari
+        # cursor_control_enabled, dan TIDAK di-null-kan saat cursor mode
+        # ditoggle (lifecycle terpisah total).
+        self.on_tilt_left: Optional[callable] = None
+        self.on_tilt_right: Optional[callable] = None
+        self.tilt_calib_phase: str = "idle"   # idle|neutral|right|ready — dibaca UI utk instruksi
+        self.tilt_calib_progress: str = ""   # "N/M" (sample terkumpul/dibutuhkan) selama phase=="right" — dibaca UI utk feedback progres, lihat _run_tilt_calibration
+        self._tilt_calib_ready: bool = False
+        self._tilt_calib_vec: Optional[tuple] = None
+        self._tilt_neutral: tuple = (0.0, 0.0, 1.0)   # posisi netral SENDIRI, lihat _run_tilt_calibration
+        self._tilt_gyro_axis: Optional[int] = None   # 0=X/1=Y/2=Z, axis gyro dominan saat tilt kanan (kalibrasi)
+        self._tilt_gyro_sign: float = 1.0             # tidak dipakai langsung saat ini, disimpan untuk diagnostik
+        self._tilt_calib_thread: Optional[threading.Thread] = None
+        self._tilt_calib_gen: int = 0   # generation token — cegah thread kalibrasi basi menimpa hasil baru saat reconnect cepat
+        # Edge state: "idle" (netral) → "risen" (melewati threshold, nunggu
+        # release) → kembali "idle" setelah release (valid) atau timeout
+        # (dibuang, dianggap gerakan lambat/menahan, bukan quick tilt).
+        self._tilt_state: str = "idle"
+        self._tilt_rise_side: str = ""     # "left" | "right" saat _tilt_state=="risen"
+        self._tilt_rise_time: float = 0.0
+        self._tilt_rise_peak: float = 0.0   # |tilt_val| tertinggi selama "risen" saat ini — dasar release relatif, lihat _TILT_RELEASE_RATIO
+        self._tilt_cooldown: float = 0.0
+        self._tilt_refractory_until: float = 0.0   # blokir rise baru sampai timestamp ini, lihat _fire_tilt_command
+        self._tilt_rearmed: bool = True   # False setelah fire sampai tilt_val terlihat dekat nol sekali — lihat _TILT_REARM_THRESHOLD. True di awal sesi (belum pernah fire, tidak perlu re-arm).
+        self._tilt_last_fire_time: float = 0.0   # timestamp fire terakhir — dasar hitung _TILT_REARM_TIMEOUT_S, TIDAK berubah oleh rise berikutnya (beda dari _tilt_rise_time)
+        self._tilt_diag_last: float = 0.0   # rate-limit print diagnostik [TILT], lihat _update_tilt_command
+        self._tilt_still_since: Optional[float] = None   # timestamp mulai diam (gyro rendah), None = sedang bergerak — lihat _maybe_recenter_tilt_neutral
+        self._tilt_abs_val_window: list = []   # buffer |tilt_val| beberapa tick terakhir — dasar cek arah gerakan (menjauh/mendekat), lihat _TILT_MOVING_AWAY_WINDOW_N
         self._relax_cooldown: float = 0.0
         self._relax_streak: int = 0         # tick BERTURUT-TURUT dgn alpha_ratio > threshold (sustained closure)
         self._relax_alpha_hist: list = []   # buffer raw frontal alpha power (uV^2) untuk baseline
@@ -275,6 +311,7 @@ class MuseConnector:
         self._latest_acc:  tuple = (0.0, 0.0, 1.0)
         self._latest_gyro: tuple = (0.0, 0.0, 0.0)
         self._acc_recent:  list  = []   # rolling buffer utk baseline recenter (rata-rata, bukan 1 sample)
+        self._acc_sample_count: int = 0   # increment HANYA saat chunk ACC nyata diterima (bukan kosong) — lihat _imu_loop. Dipakai kalibrasi tilt utk membedakan "belum ada data sensor sama sekali" dari "data sensor stabil"
         self._imu_thread: Optional[threading.Thread] = None
         self._imu_thread_stop = threading.Event()
         self.cursor_velocity_x: float = 0.0   # px/detik — dibaca mouse_connector
@@ -520,6 +557,32 @@ class MuseConnector:
         self._tilt_ema_up     = 0.0
         self._tilt_ema_right  = 0.0
         self._acc_recent      = []
+        self._acc_sample_count = 0
+        # Tilt command (tilt_left/tilt_right) — reset total, harus
+        # dikalibrasi ulang tiap sesi connect (lihat _run_tilt_calibration).
+        # gen di-increment DULU (sebelum reset flag lain) — thread kalibrasi
+        # yang mungkin masih berjalan (mid-sleep/mid-wait) langsung melihat
+        # gen-nya usang di iterasi berikutnya dan berhenti sendiri.
+        self._tilt_calib_gen  += 1
+        self._tilt_calib_ready = False
+        self._tilt_calib_vec   = None
+        self._tilt_neutral     = (0.0, 0.0, 1.0)
+        self._tilt_gyro_axis   = None
+        self._tilt_gyro_sign   = 1.0
+        self._tilt_calib_thread = None
+        self.tilt_calib_phase  = "idle"
+        self.tilt_calib_progress = ""
+        self._tilt_state       = "idle"
+        self._tilt_rise_side   = ""
+        self._tilt_rise_time   = 0.0
+        self._tilt_rise_peak   = 0.0
+        self._tilt_cooldown    = 0.0
+        self._tilt_refractory_until = 0.0
+        self._tilt_rearmed     = True
+        self._tilt_last_fire_time = 0.0
+        self._tilt_diag_last   = 0.0
+        self._tilt_still_since = None
+        self._tilt_abs_val_window = []
         self.composer.reset()
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
@@ -670,6 +733,33 @@ class MuseConnector:
                 target=self._imu_loop, args=(acc_inlet, gyro_inlet), daemon=True
             )
             self._imu_thread.start()
+
+            # Kalibrasi tilt_left/tilt_right — 1x otomatis tiap sesi connect,
+            # independen dari Cursor Control Mode (lihat _run_tilt_calibration).
+            # Thread terpisah dari _imu_thread supaya tidak memblokir baca
+            # ACC/GYRO ~50Hz selama proses kalibrasi berjalan (~2.4s).
+            # Generation token dinaikkan DULU — thread kalibrasi attempt
+            # sebelumnya (jika masih hidup dari auto-reconnect cepat) akan
+            # melihat gen-nya sudah usang dan berhenti sendiri tanpa menimpa
+            # hasil kalibrasi yang baru ini (lihat _run_tilt_calibration).
+            self._tilt_calib_gen += 1
+            self._tilt_calib_ready = False
+            self._tilt_calib_vec = None
+            # Reset di sini (bukan cuma di disconnect()) — DITEMUKAN LEWAT
+            # CODE REVIEW: auto-reconnect (_connect_thread) TIDAK memanggil
+            # disconnect() di antara percobaan, cuma set running=False lalu
+            # _kill_proc(). Kalau attempt sebelumnya sempat terima ACC data
+            # asli sebelum putus (_acc_sample_count > 0), attempt baru ini
+            # akan salah kira "ACC sudah siap" dan skip wait loop di
+            # _run_tilt_calibration — padahal _imu_loop yang baru (dimulai
+            # sesaat lagi) belum tentu sudah dapat data segar dari inlet
+            # yang baru. Reset eksplisit di sini menutup celah itu.
+            self._acc_sample_count = 0
+            self.tilt_calib_phase = "neutral"
+            self._tilt_calib_thread = threading.Thread(
+                target=self._run_tilt_calibration, args=(self._tilt_calib_gen,), daemon=True
+            )
+            self._tilt_calib_thread.start()
         else:
             self._imu_thread = None
 
@@ -708,6 +798,7 @@ class MuseConnector:
                 self._acc_recent.append(acc_chunk[-1])
                 if len(self._acc_recent) > 8:
                     self._acc_recent.pop(0)
+                self._acc_sample_count += 1
 
             try:
                 gyro_chunk, _ = gyro_inlet.pull_chunk(timeout=0.0, max_samples=32)
@@ -718,6 +809,14 @@ class MuseConnector:
 
             if self.cursor_control_enabled:
                 self._update_cursor_control()
+                # Mutual exclusion dengan tilt_left/right: paksa balik ke
+                # idle supaya edge "risen" yang mungkin sedang menunggu
+                # release tidak tiba-tiba fire begitu user mematikan cursor
+                # mode di tengah gerakan (state basi dari sebelum mode ON).
+                self._tilt_state     = "idle"
+                self._tilt_rise_side = ""
+            else:
+                self._update_tilt_command()
 
             elapsed = time.time() - t0
             time.sleep(max(0.0, IMU_DT - elapsed))
@@ -1510,6 +1609,778 @@ class MuseConnector:
         t = min((mag - self._TILT_DEADZONE) / (self._TILT_MAX - self._TILT_DEADZONE), 1.0)
         speed = (t ** self._CURVE_EXPONENT) * self._CURSOR_MAX_SPEED
         return speed if tilt > 0 else -speed
+
+    # ── Head tilt command (tilt_left / tilt_right) ──────────────────────────
+    # Gerakan MIRINGKAN kepala ke samping (telinga → bahu), quick tilt-and-
+    # release — BUKAN gerakan tilt-and-hold dipakai Cursor Control Mode.
+    # Sengaja pakai kalibrasi & state SENDIRI (tidak reuse _calib_right_vec
+    # milik cursor control): kalibrasi cursor di-null-kan tiap toggle mode,
+    # sedangkan command ini justru harus tetap hidup SAAT mode cursor OFF —
+    # menyatukan keduanya berarti vector selalu None persis saat dibutuhkan.
+
+    _TILT_MOVING_AWAY_WINDOW_N = 5   # jumlah sample terakhir (~100ms @50Hz)
+                                      # dipakai cari nilai TERKECIL sebagai
+                                      # basis pembanding "sedang menjauh" —
+                                      # bukan cuma 1 tick sebelumnya (lihat
+                                      # _TILT_MOVING_AWAY_EPS untuk kenapa).
+    _TILT_MOVING_AWAY_EPS  = 0.006   # |tilt_val| tick ini harus lebih besar
+                                      # dari nilai TERKECIL dalam window +
+                                      # epsilon ini, supaya dianggap "sedang
+                                      # menjauh dari netral" (syarat rise).
+                                      # DITEMUKAN LEWAT LOG NYATA: gerakan
+                                      # KEMBALI ke netral (mendekat, arah
+                                      # manapun, kecepatan berapapun)
+                                      # sebelumnya bisa tetap fire karena
+                                      # sistem cuma lihat POSISI, tidak tahu
+                                      # ARAH pergerakan. Percobaan pertama
+                                      # (bandingkan cuma 1 tick sebelumnya)
+                                      # DIBUANG — terlalu rapuh terhadap
+                                      # osilasi natural pada tilt cepat, lihat
+                                      # komentar panjang di _update_tilt_command.
+    _TILT_CMD_THRESHOLD    = 0.11    # ambang deviasi (proyeksi ke calib vec)
+                                      # untuk dianggap "tilt" — dinaikkan dari 0.06
+                                      # (terbukti false-positive saat idle di
+                                      # testing nyata). Jauh di atas _TILT_DEADZONE
+                                      # cursor (0.025) karena ini gesture disengaja.
+    _TILT_RELEASE_RATIO    = 0.6     # release valid kalau |tilt_val| turun ke
+                                      # bawah RATIO × puncak yang dicapai
+                                      # selama "risen" (bukan cuma ambang
+                                      # absolut _TILT_CMD_THRESHOLD*0.5=0.055).
+                                      # DITEMUKAN LEWAT LOG NYATA: gerakan
+                                      # tilt KUAT (val naik jauh di atas
+                                      # threshold, bahkan >1.0 utk gerakan
+                                      # cepat) nyaris tidak pernah turun
+                                      # kembali ke ambang absolut kecil dalam
+                                      # window release — proporsinya terlalu
+                                      # ketat utk gerakan besar, rise selalu
+                                      # timeout ke idle tanpa fire meski
+                                      # gesture-nya jelas terjadi.
+    _TILT_REARM_THRESHOLD  = 0.04    # tilt_val harus terlihat di bawah ini
+                                      # MINIMAL SEKALI (arah manapun) sebelum
+                                      # rise baru diizinkan pasca-fire — lihat
+                                      # _tilt_rearmed. Menutup celah dari log
+                                      # nyata: kepala butuh waktu VARIABEL utk
+                                      # settle balik ke netral pasca-fire,
+                                      # timer refractory tetap (1.5s) tidak
+                                      # selalu cukup; ini syarat berbasis SINYAL
+                                      # (bukan cuma waktu) yang menutup celah
+                                      # itu tanpa menebak durasi settling.
+    _TILT_REARM_TIMEOUT_S  = 6.0     # fallback keras — kalau re-arm alami
+                                      # (tilt_val < _TILT_REARM_THRESHOLD)
+                                      # tidak kunjung terjadi dalam durasi ini
+                                      # sejak fire terakhir, paksa re-arm saja.
+                                      # Mencegah deadlock permanen kalau
+                                      # baseline bergeser sangat jauh dan
+                                      # recenter (EMA lambat, alpha=0.05)
+                                      # belum sempat mengejar — trade-off satu
+                                      # kemungkinan false-positive lebih baik
+                                      # daripada command mati total.
+    _TILT_CMD_RELEASE_MIN_S = 0.12   # rise harus bertahan minimal ini sebelum
+                                      # release dihitung valid — buang micro-blip.
+    _TILT_CMD_RELEASE_MAX_S = 0.8    # rise harus release SEBELUM ini — kalau
+                                      # ditahan lebih lama (mis. memang lagi
+                                      # menyandarkan kepala), dianggap bukan
+                                      # command dan dibuang saat timeout.
+    _TILT_CMD_COOLDOWN_S    = 1.5    # sama dengan wink — cukup untuk memisah
+                                      # tilt berikutnya, selaras dgn global mutex.
+    _TILT_CMD_REFRACTORY_S  = 1.5    # setelah FIRE (bukan setelah dibuang),
+                                      # blokir total masuk state "risen" lagi
+                                      # sampai durasi ini lewat — mencegah
+                                      # rebound kepala kembali ke netral
+                                      # ter-baca sebagai rise kedua yang valid
+                                      # (trigger dobel dari 1 gerakan fisik).
+    _TILT_GYRO_MIN_DPS      = 5.0    # gyro axis dominan harus melebihi ini
+                                      # supaya dihitung sebagai rotasi nyata,
+                                      # bukan noise diam (dipakai axis-dominance
+                                      # guard, lihat _update_tilt_command).
+                                      # Diturunkan dari 15.0 — data nyata
+                                      # menunjukkan tilt genuine yang dilakukan
+                                      # PELAN (ditahan, bukan sentakan cepat)
+                                      # bisa serendah ~3-5 dps; 15.0 menolak
+                                      # gesture asli yang tidak tergesa-gesa.
+    _TILT_RECENTER_GYRO_DPS = _TILT_GYRO_MIN_DPS   # SAMA DENGAN _TILT_GYRO_
+                                      # MIN_DPS SENGAJA (bukan angka independen
+                                      # lebih rendah seperti percobaan awal) —
+                                      # percobaan awal pakai 3.0 (lebih rendah
+                                      # dari 5.0) dengan alasan "supaya tidak
+                                      # pernah re-center saat user menahan tilt
+                                      # pelan", tapi review menemukan itu
+                                      # justru membuka CELAH 3-5 dps: gerakan
+                                      # fidget/drift tak sadar di rentang itu
+                                      # bisa lolos _is_roll_dominant (>3 dps
+                                      # lama dianggap "rotasi nyata") TAPI
+                                      # tidak pernah ter-koreksi oleh re-center
+                                      # (>3 dps dianggap "tidak diam"), potensi
+                                      # menambah false-positive baru. Menyamakan
+                                      # kedua angka menutup celah itu — catatan:
+                                      # gyro_mag (3-axis gabungan, dipakai di
+                                      # sini) selalu >= roll_mag (1 axis,
+                                      # dipakai _is_roll_dominant), jadi
+                                      # menyamakan angka tetap konsisten secara
+                                      # matematis (bukan sekadar kebetulan sama).
+    _TILT_RECENTER_HOLD_S   = 1.0    # durasi diam (di bawah _TILT_RECENTER_
+                                      # GYRO_DPS) sebelum re-center dieksekusi —
+                                      # cegah re-center saat user cuma sesaat
+                                      # transit lewat posisi netral di tengah
+                                      # gerakan lain.
+    _TILT_RECENTER_EMA_ALPHA = 0.05  # re-center pakai EMA LAMBAT (bukan
+                                      # snapshot instan) — perubahan baseline
+                                      # per re-center kecil, drift dikoreksi
+                                      # bertahap. Mencegah lompatan baseline
+                                      # tiba-tiba yang bisa terasa aneh kalau
+                                      # user kebetulan langsung tilt lagi
+                                      # persis setelah re-center terjadi.
+    _TILT_GYRO_DOMINANCE    = 1.15   # axis roll kalibrasi harus >= sekian× lebih
+                                      # besar dari axis gyro TERBESAR LAINNYA
+                                      # supaya rotasi dianggap "murni roll" —
+                                      # menoleh (yaw) / mengangguk (pitch) akan
+                                      # didominasi axis lain dan ditolak di sini.
+                                      # Diturunkan dari 1.5 — 1 titik data gyro
+                                      # nyata (testing headset asli) menunjukkan
+                                      # rasio dominasi genuine serendah ~1.4×
+                                      # (kepala manusia nyaris tidak pernah
+                                      # berputar murni 1 axis). 1.15 SENGAJA
+                                      # diberi margin ekstra di bawah 1.4× itu
+                                      # (bukan 1.4× persis) karena baru 1 sampel
+                                      # — belum cukup untuk yakin itu batas
+                                      # bawah sebenarnya; nilai lain (lebih
+                                      # pelan/cepat) mungkin turun lebih jauh.
+                                      # Trade-off: guard jadi lebih longgar
+                                      # (mendekati 1.0 = tanpa diskriminasi
+                                      # sama sekali), perlu di-tuning naik lagi
+                                      # kalau menoleh/mengangguk ternyata mulai
+                                      # false-positive setelah perubahan ini.
+    _TILT_GYRO_PEAK_WINDOW_N = 6      # jumlah sample DI SEKITAR peak_idx (accel
+                                      # deviation maksimum) dipakai hitung RMS
+                                      # axis dominan saat kalibrasi — di
+                                      # _STABILITY_POLL_S=0.1s/sample, setara
+                                      # ~0.6s window terpusat di momen tilt
+                                      # tercapai. Dipersempit dari "seluruh 2
+                                      # detik rekaman" karena testing nyata
+                                      # menunjukkan RMS window penuh bisa salah
+                                      # pilih axis akibat 1 ledakan gyro sesaat
+                                      # di luar gerakan roll yang sebenarnya.
+    _CALIB_SAMPLE_COUNT      = 3      # jumlah percobaan tilt kanan TERPISAH
+                                      # yang dikumpulkan & dirata-ratakan saat
+                                      # kalibrasi — DITEMUKAN LEWAT PENGGUNAAN
+                                      # NYATA BERULANG: kalibrasi dari 1
+                                      # gerakan referensi terlalu sensitif
+                                      # terhadap variasi kecil (kecepatan,
+                                      # sudut, overshoot), menyebabkan axis &
+                                      # arah tidak stabil antar sesi meski
+                                      # headset & gerakan user sama secara
+                                      # subjektif. Rata-rata dari beberapa
+                                      # sample independen jauh lebih tahan
+                                      # terhadap 1 sample yang kebetulan tidak
+                                      # representatif.
+    _CALIB_CONSISTENCY_MIN_DOT = 0.85 # ambang cosine similarity minimum
+                                      # antara arah sample baru vs rata-rata
+                                      # sample yang sudah terkumpul, supaya
+                                      # sample baru diterima — DITEMUKAN LEWAT
+                                      # LOG NYATA: sample dengan norm pas-
+                                      # pasan di atas _MIN_DEV_NORM bisa lolos
+                                      # tapi arahnya beda jauh dari sample
+                                      # lain (mis. axis 0 vs 2), merusak rata-
+                                      # rata. 0.85 ≈ sudut maksimum ~32° dari
+                                      # rata-rata arah yang sudah terkumpul —
+                                      # cukup ketat untuk menolak gerakan yang
+                                      # tidak bersih/konsisten, cukup longgar
+                                      # untuk variasi natural antar percobaan
+                                      # manusia yang sama-sama tilt kanan.
+
+    def _run_tilt_calibration(self, gen: int) -> None:
+        """Kalibrasi 1-sumbu MANDIRI untuk tilt_left/tilt_right — independen
+        total dari _run_cursor_calibration (3 tahap, punya cursor control).
+        Hanya butuh 1 vektor referensi (tilt kanan); tilt kiri = arah
+        berlawanan pada sumbu yang sama, tidak perlu direkam terpisah.
+        Dipicu SEKALI otomatis setelah connect (lihat _launch_and_loop),
+        berjalan independen dari cursor_control_enabled — TIDAK bail-out
+        kalau cursor mode mati (beda dari _wait_for_stable_window yang
+        dipakai kalibrasi cursor, yang justru mensyaratkan mode itu ON).
+
+        `tilt_calib_phase` di-broadcast lewat state_update (eeg_server.py)
+        supaya UI bisa menampilkan instruksi "tilt kanan sekarang" — tanpa
+        ini, user tidak tahu kapan harus bergerak, kedua window capture
+        akan sama-sama netral, dan kalibrasi SELALU jatuh ke fallback
+        (1,0,0) alih-alih mengukur arah asli. Sama filosofinya dengan
+        cursor_calib_phase pada _run_cursor_calibration.
+
+        `gen` (generation token) mencegah race saat reconnect cepat:
+        _launch_and_loop menaikkan self._tilt_calib_gen tiap kali thread
+        kalibrasi baru dibuat. Thread lama yang masih sleep/wait dari attempt
+        sebelumnya (self.running sempat False lalu True lagi saat auto-
+        reconnect) akan berhenti menulis begitu gen-nya sudah usang, alih-alih
+        menimpa hasil kalibrasi thread yang baru dengan data basi.
+
+        Fase "right" TIDAK menunggu accel stabil lalu snapshot sekali — itu
+        menyebabkan bug arah terbalik di testing nyata: window stabil bisa
+        tertangkap PERSIS saat user overshoot balik ke arah berlawanan dan
+        sempat diam sesaat di sana, sehingga _tilt_calib_vec terekam
+        berlawanan arah, dan SEMUA deteksi sesudahnya ikut terbalik
+        konsisten sepanjang sesi. Sekarang fase ini merekam accel+gyro
+        SEPANJANG _TILT_CALIB_RECORD_S detik (lihat _record_tilt_motion),
+        lalu ambil titik DEVIASI MAKSIMUM dari seluruh riwayat itu sebagai
+        arah kalibrasi — bukan snapshot di satu titik waktu tertentu. RMS
+        gyro dari SELURUH rekaman (bukan cuma di titik deviasi maksimum)
+        dipakai menentukan axis roll dominan untuk axis-dominance guard di
+        _update_tilt_command, supaya menoleh/mengangguk tidak ter-baca
+        sebagai tilt (_TILT_GYRO_DOMINANCE)."""
+        _READ_DELAY_S = 1.2
+        _MIN_DEV_NORM = 0.25   # dev_norm harus setinggi ini (dinaikkan dari
+                                # 0.08) — DITEMUKAN LEWAT LOG NYATA: 0.08
+                                # terlalu rendah, sample dengan norm=0.085
+                                # (nyaris tidak bergerak) tetap lolos dan
+                                # merusak rata-rata karena arahnya beda dari
+                                # sample lain (axis 0 vs 2). Ambang lebih
+                                # tinggi memaksa gerakan tilt yang JELAS/TEGAS
+                                # sebelum dihitung sebagai sample valid.
+        # TIDAK ADA BATAS PERCOBAAN — sesuai arahan user: lebih baik
+        # kalibrasi makan waktu lama tapi akurat, daripada cepat tapi sample
+        # jelek ikut lolos dan merusak hasil rata-rata. Loop terus mengulang
+        # sampai _CALIB_SAMPLE_COUNT sample VALID & KONSISTEN benar-benar
+        # terkumpul, banner + progress counter di browser memberi tahu user
+        # ini masih berjalan (bukan macet), berapa lama pun itu perlu.
+        _ACC_WAIT_TIMEOUT_S = 5.0   # tunggu sample ACC PERTAMA sebelum mulai
+                                     # apapun — DITEMUKAN LEWAT LOG NYATA:
+                                     # norm=0.000 PERSIS di semua 3 percobaan
+                                     # adalah tanda _latest_acc masih macet di
+                                     # default init (0,0,1) karena BLE
+                                     # notification utk channel ACC/GYRO
+                                     # kadang telat mulai mengalir dibanding
+                                     # EEG (bisa >2 detik setelah connect).
+                                     # _wait_for_stable_window_tilt tidak bisa
+                                     # membedakan "data beku di default" dari
+                                     # "data nyata yang kebetulan sangat
+                                     # stabil" (keduanya sama-sama variance
+                                     # nol) — makanya fase neutral lolos cepat
+                                     # padahal belum ada sensor data sungguhan.
+
+        # Tunggu sample ACC PERTAMA (bukan cuma stream resolved) sebelum
+        # mulai fase "neutral" sama sekali — mencegah _tilt_neutral terekam
+        # dari nilai default beku, yang membuat SEMUA deviasi berikutnya
+        # (termasuk tilt kanan yang nyata) selalu terhitung persis nol.
+        _acc_wait_start = time.time()
+        while self._acc_sample_count == 0:
+            if not self.running or gen != self._tilt_calib_gen:
+                return
+            if time.time() - _acc_wait_start > _ACC_WAIT_TIMEOUT_S:
+                print("⚠️  Kalibrasi tilt: ACC sensor tidak pernah mengirim data "
+                      f"dalam {_ACC_WAIT_TIMEOUT_S:.0f}s — lanjut apa adanya, "
+                      "kemungkinan arah tidak akurat")
+                break
+            time.sleep(self._STABILITY_POLL_S)
+
+        self.tilt_calib_phase = "neutral"
+        time.sleep(_READ_DELAY_S)
+        if not self.running or gen != self._tilt_calib_gen:
+            return
+        window = self._wait_for_stable_window_tilt(gen)
+        if window is None or not self.running or gen != self._tilt_calib_gen:
+            return
+        # Neutral SENDIRI (_tilt_neutral) — sengaja TIDAK reuse _imu_baseline
+        # milik cursor control: field itu hanya terisi kalau Cursor Control
+        # Mode pernah diaktifkan sesi ini, dan bisa di-reset ke default
+        # hardcoded (0,0,1) sewaktu-waktu oleh set_cursor_control()/disconnect().
+        # Tilt command harus tetap kalibrasi valid walau cursor mode TIDAK
+        # PERNAH dinyalakan sepanjang sesi.
+        self._tilt_neutral = tuple(np.mean(np.array(window), axis=0))
+
+        self.tilt_calib_phase = "right"
+        # KALIBRASI MULTI-SAMPLE — DITEMUKAN LEWAT PENGGUNAAN NYATA BERULANG:
+        # kalibrasi dari SATU gerakan referensi terlalu sensitif terhadap
+        # variasi kecil (kecepatan, sudut, timing overshoot) — hasilnya
+        # (_tilt_calib_vec, axis roll) tidak stabil antar sesi meski headset
+        # & gerakan user secara subjektif sama, menyebabkan siklus false-
+        # positive/negative yang berubah bentuk tiap sesi. Fix: kumpulkan
+        # _CALIB_SAMPLE_COUNT percobaan tilt kanan TERPISAH (user mengulang
+        # gerakan dengan jeda baca di antaranya), lalu RATA-RATAKAN vector
+        # arah (masing-masing dinormalisasi dulu sebelum dirata-rata, supaya
+        # sample yang kebetulan lebih kuat tidak mendominasi) dan pilih axis
+        # dominan lewat VOTING MAYORITAS dari axis yang terpilih tiap sample
+        # — jauh lebih tahan terhadap 1 sample yang kebetulan tidak
+        # representatif dibanding bergantung pada 1 percobaan tunggal.
+        collected_dirs: list = []   # unit vectors dari tiap sample sukses & konsisten
+        collected_axes: list = []   # dominant_axis dari tiap sample sukses
+        attempt = 0
+        while len(collected_dirs) < self._CALIB_SAMPLE_COUNT:
+            attempt += 1
+            # Progress ke browser (bukan cuma console print) — durasi
+            # kalibrasi TIDAK DIBATASI (lihat komentar _MIN_DEV_NORM di
+            # atas), bisa makan waktu lama kalau user berulang kali gagal
+            # tilt cukup jelas/konsisten — progress counter mencegah user
+            # mengira sistem macet.
+            self.tilt_calib_progress = f"{len(collected_dirs)}/{self._CALIB_SAMPLE_COUNT}"
+            if attempt > 1:
+                # Jeda antar percobaan (selain _READ_DELAY_S internal di
+                # _record_tilt_motion) — beri waktu user kembali netral dan
+                # bersiap untuk percobaan berikutnya, banner tetap "tilt kanan".
+                time.sleep(_READ_DELAY_S)
+                if not self.running or gen != self._tilt_calib_gen:
+                    return
+            # PENTING — pendekatan lama (tunggu accel STABIL lalu snapshot
+            # sesaat) punya bug fundamental yang ditemukan lewat code review:
+            # window "stabil" bisa tertangkap PERSIS saat user overshoot balik
+            # ke arah berlawanan dan sempat diam sesaat di sana — dev_norm
+            # tetap besar tapi TANDA-nya terbalik. Perbaikan: rekam accel
+            # SEPANJANG seluruh fase "right" (bukan snapshot akhir), ambil
+            # deviasi MAKSIMUM dari seluruh riwayat sebagai arah kalibrasi
+            # sample ini — titik terjauh dari netral selama SATU gerakan
+            # tilt-kanan yang disengaja adalah puncak gerakan itu sendiri.
+            samples_acc, samples_gyro = self._record_tilt_motion(gen)
+            if samples_acc is None or not self.running or gen != self._tilt_calib_gen:
+                return
+            arr = np.array(samples_acc) - np.array(self._tilt_neutral)
+            norms = np.linalg.norm(arr, axis=1)
+            peak_idx = int(np.argmax(norms))
+            cand_dev = arr[peak_idx]
+            cand_norm = float(norms[peak_idx])
+
+            if cand_norm < _MIN_DEV_NORM:
+                # Deviasi maksimum sample ini masih terlalu kecil — user
+                # kemungkinan belum sempat tilt sama sekali dalam attempt
+                # ini. Retry, tidak dihitung sebagai sample valid.
+                print(f"⚠️  Kalibrasi tilt: deviasi maksimum terlalu kecil (norm={cand_norm:.3f}) "
+                      f"— percobaan {attempt}, tidak dihitung, retry...")
+                continue
+
+            cand_dir = cand_dev / cand_norm
+
+            # Syarat KONSISTENSI ARAH — DITEMUKAN LEWAT LOG NYATA: sample
+            # yang lolos _MIN_DEV_NORM tapi arahnya jauh berbeda dari
+            # sample lain (mis. axis 0 vs axis 2 pada sample lain) tetap
+            # ikut dirata-rata dan merusak hasil akhir. Sebelum diterima,
+            # cocokkan cand_dir dengan RATA-RATA arah yang sudah terkumpul
+            # (dot product unit vector = cosine sudut antar-arah) — kalau
+            # sudutnya terlalu jauh (di bawah _CALIB_CONSISTENCY_MIN_DOT),
+            # sample ini dianggap gerakan yang berbeda/tidak bersih, DIBUANG
+            # tanpa menambah counter, user diminta ulangi.
+            if collected_dirs:
+                _ref_dir = np.mean(np.array(collected_dirs), axis=0)
+                _ref_norm = np.linalg.norm(_ref_dir)
+                if _ref_norm > 1e-6:
+                    _cos_sim = float(np.dot(cand_dir, _ref_dir / _ref_norm))
+                    if _cos_sim < self._CALIB_CONSISTENCY_MIN_DOT:
+                        print(f"⚠️  Kalibrasi tilt: sample TIDAK KONSISTEN dengan "
+                              f"sample sebelumnya (cos_sim={_cos_sim:.2f}, "
+                              f"min={self._CALIB_CONSISTENCY_MIN_DOT}) — "
+                              f"percobaan {attempt}, dibuang, ulangi gerakan yang sama.")
+                        continue
+
+            collected_dirs.append(cand_dir)
+
+            # AXIS DOMINAN diambil dari titik GYRO MAGNITUDE MAKSIMUM sendiri
+            # (bukan RMS di sekitar peak_idx accel) — DITEMUKAN LEWAT LOG
+            # NYATA: peak_idx (posisi PALING MIRING) terjadi di UJUNG
+            # gerakan, tepat saat kepala BERHENTI berputar sejenak di titik
+            # terjauh — kecepatan rotasi (gyro) di titik itu MENDEKATI NOL,
+            # bukan puncaknya. Kecepatan rotasi TERTINGGI terjadi di TENGAH
+            # gerakan (saat kepala paling cepat berputar menuju posisi
+            # tilt). Cari sample dengan gyro magnitude TERBESAR di seluruh
+            # rekaman untuk menentukan axis dominan sample ini.
+            if samples_gyro:
+                g_arr = np.array(samples_gyro)
+                gyro_mags = np.linalg.norm(g_arr, axis=1)
+                gyro_peak_idx = int(np.argmax(gyro_mags))
+                _half = self._TILT_GYRO_PEAK_WINDOW_N // 2
+                _lo = max(0, gyro_peak_idx - _half)
+                _hi = min(len(g_arr), gyro_peak_idx + _half + 1)
+                g_near_peak = g_arr[_lo:_hi]
+                rms = np.sqrt(np.mean(g_near_peak ** 2, axis=0))
+                collected_axes.append(int(np.argmax(rms)))
+            self.tilt_calib_progress = f"{len(collected_dirs)}/{self._CALIB_SAMPLE_COUNT}"
+            print(f"  ✓ Sample {len(collected_dirs)}/{self._CALIB_SAMPLE_COUNT} "
+                  f"terkumpul (norm={cand_norm:.3f}, axis={collected_axes[-1] if collected_axes else '?'})")
+
+        if collected_dirs:
+            mean_dir = np.mean(np.array(collected_dirs), axis=0)
+            mean_norm = np.linalg.norm(mean_dir)
+            if mean_norm > 1e-6:
+                self._tilt_calib_vec = tuple(mean_dir / mean_norm)
+            else:
+                # Rata-rata vector saling meniadakan (kasus sangat langka —
+                # sample-sample menunjuk arah yang jauh berbeda satu sama
+                # lain) — fallback X axis, sama seperti dev is None.
+                self._tilt_calib_vec = (1.0, 0.0, 0.0)
+                print("⚠️  Kalibrasi tilt: sample-sample saling bertentangan arah — fallback ke axis default")
+        else:
+            # Semua percobaan gagal — fallback X axis, sama seperti
+            # fallback _run_cursor_calibration (kasus langka).
+            self._tilt_calib_vec = (1.0, 0.0, 0.0)
+            print("⚠️  Kalibrasi tilt gagal total — fallback ke axis default, arah mungkin tidak akurat")
+
+        # Axis gyro dominan — VOTING MAYORITAS dari axis terpilih tiap
+        # sample (bukan cuma 1 attempt) — jauh lebih tahan terhadap 1 sample
+        # yang kebetulan menangkap axis salah.
+        if collected_axes:
+            _counts = [collected_axes.count(i) for i in range(3)]
+            self._tilt_gyro_axis = int(np.argmax(_counts))
+            print(f"  🗳️  Voting axis dari {len(collected_axes)} sample: {collected_axes} → axis={self._tilt_gyro_axis}")
+        else:
+            # Fallback path (tidak ada sample gyro terkumpul) — guard axis-
+            # dominance di _update_tilt_command akan skip diam-diam kalau
+            # axis ini None (fallback ke accel-only), tidak
+            # crash.
+            self._tilt_gyro_axis = None
+            self._tilt_gyro_sign = 1.0
+
+        self._tilt_calib_ready = True
+        self.tilt_calib_phase = "ready"
+        self.tilt_calib_progress = ""
+        print(f"🎯  Kalibrasi tilt command selesai — vec={tuple(round(v,3) for v in self._tilt_calib_vec)} "
+              f"gyro_axis={self._tilt_gyro_axis}")
+
+    def _wait_for_stable_window_tilt(self, gen: int) -> Optional[list]:
+        """Sama seperti _wait_for_stable_window, tapi gate pakai self.running
+        DAN generation token (bukan cursor_control_enabled) — kalibrasi tilt
+        command berjalan independen dari status Cursor Control Mode, tapi
+        tetap berhenti sendiri begitu ada kalibrasi baru (reconnect) yang
+        menggantikannya."""
+        t_start = time.time()
+        window: list = []
+        while (self.running and not self._imu_thread_stop.is_set()
+               and gen == self._tilt_calib_gen):
+            window.append(self._latest_acc)
+            if len(window) > self._STABILITY_WINDOW_N:
+                window.pop(0)
+            elapsed = time.time() - t_start
+            if len(window) >= self._STABILITY_WINDOW_N:
+                arr = np.array(window)
+                stds = np.std(arr, axis=0)
+                if np.all(stds < self._STABILITY_STD_THRESH):
+                    return window
+            if elapsed > self._STABILITY_TIMEOUT_S:
+                return window if window else None
+            time.sleep(self._STABILITY_POLL_S)
+        return None
+
+    _TILT_CALIB_RECORD_S = 2.0   # durasi rekam kontinu fase "right" — cukup
+                                  # untuk 1 gerakan tilt lengkap (naik+turun)
+                                  # meski user agak lambat bereaksi ke banner.
+
+    def _record_tilt_motion(self, gen: int):
+        """Rekam SETIAP sample accel & gyro selama _TILT_CALIB_RECORD_S detik
+        (bukan menunggu accel stabil lalu snapshot sesaat seperti
+        _wait_for_stable_window_tilt) — dipakai fase "right" kalibrasi tilt.
+
+        Beda filosofi dari _wait_for_stable_window_tilt: metode itu cocok
+        untuk cursor control (butuh POSISI AKHIR yang ditahan), tapi untuk
+        kalibrasi tilt_left/right kita justru butuh SELURUH RIWAYAT gerakan
+        supaya bisa ambil titik deviasi maksimum sebagai arah kalibrasi
+        (lihat pemanggil, _run_tilt_calibration) — tidak bergantung pada
+        kapan tepatnya accel "kebetulan" stabil.
+
+        Return (samples_acc, samples_gyro) — list of (x,y,z) masing-masing.
+        samples_acc None kalau dibatalkan (disconnect/reconnect/generation
+        baru) sebelum durasi rekam selesai."""
+        t_start = time.time()
+        samples_acc: list = []
+        samples_gyro: list = []
+        while (self.running and not self._imu_thread_stop.is_set()
+               and gen == self._tilt_calib_gen):
+            samples_acc.append(self._latest_acc)
+            samples_gyro.append(self._latest_gyro)
+            if time.time() - t_start > self._TILT_CALIB_RECORD_S:
+                return samples_acc, samples_gyro
+            time.sleep(self._STABILITY_POLL_S)
+        return None, samples_gyro
+
+    def _update_tilt_command(self) -> None:
+        """Dipanggil tiap tick _imu_loop (~50Hz). Deteksi quick tilt-and-
+        release sebagai command tilt_left/tilt_right — TERPISAH TOTAL dari
+        _update_cursor_control (dipanggil hanya jika cursor mode OFF, lihat
+        _imu_loop). Pola rise→release meniru arsitektur jaw clench edge-
+        triggered yang sudah terbukti reliable (lihat GestureComposer/_loop),
+        supaya "menoleh biasa" (lambat, tidak release cepat) tidak ke-trigger
+        sebagai command.
+
+        Axis-dominance guard: rise HANYA valid kalau axis gyro yang paling
+        dominan SAAT INI sama dengan _tilt_gyro_axis (axis roll hasil
+        kalibrasi) DAN cukup dominan dibanding axis lain (_TILT_GYRO_
+        DOMINANCE). Menoleh (yaw) dan mengangguk (pitch) punya rotasi
+        dominan di axis LAIN — proyeksi accel-nya kadang tetap lolos
+        threshold (axis kalibrasi tidak pernah 100% ortogonal ke gerakan
+        lain), tapi gyro-nya akan menunjukkan axis lain yang berputar,
+        bukan axis roll — guard ini menolak rise itu sebelum sempat masuk
+        state "risen" sama sekali."""
+        if not self._tilt_calib_ready or self._tilt_calib_vec is None:
+            return
+
+        gx, gy, gz = self._latest_gyro
+        gyro_vec = (gx, gy, gz)
+        gyro_mag = (gx ** 2 + gy ** 2 + gz ** 2) ** 0.5
+        if gyro_mag > self._GYRO_GATE_DPS:
+            # Gerakan kepala terlalu cepat/kasar (mis. headset kegoyang) —
+            # accel terkontaminasi, jangan pakai bacaan ini sama sekali
+            # (beda dari cursor control yang menahan EMA lama; di sini kita
+            # skip tick ini total supaya tidak salah mulai/mengakhiri edge).
+            return
+
+        dev = np.array(self._latest_acc) - np.array(self._tilt_neutral)
+        tilt_val = float(np.dot(dev, np.array(self._tilt_calib_vec)))
+        _now = time.time()
+
+        # Arah gerakan (menjauh vs mendekat dari netral) — DITEMUKAN LEWAT
+        # LOG NYATA: gerakan KEMBALI ke netral pelan-pelan (misal ekor dari
+        # tilt yang tadinya gagal rise, atau sisa gerakan lain apapun) bisa
+        # tetap fire, karena _update_tilt_command sebelumnya hanya melihat
+        # POSISI (tilt_val) saat itu, tidak tahu apakah user sedang MENUJU
+        # tilt (menjauh dari nol, gesture disengaja) atau SEDANG KEMBALI
+        # (mendekat ke nol dari sisi manapun, bukan gesture baru).
+        #
+        # Percobaan PERTAMA (dibuang) membandingkan tilt_val dengan TEPAT 1
+        # tick sebelumnya — ternyata terlalu rapuh: gerakan tilt CEPAT/NORMAL
+        # (bukan cuma yang pelan) sering punya osilasi natural tick-ke-tick
+        # (percepatan non-gravitasi ikut campur ke accel, bukan cuma sudut
+        # statis), sehingga satu tick yang kebetulan turun sesaat — meski
+        # tren keseluruhan JELAS menjauh — sudah cukup menggagalkan rise di
+        # tick itu, dan syarat harus align lagi persis di tick berikutnya
+        # (threshold + axis-guard + arah, ketiganya serentak). Ditemukan dari
+        # log nyata: gerakan cepat (gyro >90dps) tetap gagal rise berulang.
+        #
+        # Fix: bandingkan dengan nilai TERKECIL dalam WINDOW beberapa tick
+        # terakhir (bukan cuma 1 tick tepat sebelumnya) — toleran 1-2 tick
+        # noise/osilasi, tapi tetap menolak tren mendekat yang konsisten.
+        self._tilt_abs_val_window.append(abs(tilt_val))
+        if len(self._tilt_abs_val_window) > self._TILT_MOVING_AWAY_WINDOW_N:
+            self._tilt_abs_val_window.pop(0)
+        _window_min = min(self._tilt_abs_val_window)
+        _tilt_moving_away = abs(tilt_val) > _window_min + self._TILT_MOVING_AWAY_EPS
+
+        # Diagnostik rate-limited (bukan tiap tick @50Hz — banjir terminal):
+        # dicetak setiap kali proyeksi mendekati/melewati sebagian threshold,
+        # supaya asimetri kiri/kanan atau axis-dominance yang menolak diam-
+        # diam bisa terlihat langsung dari nilai mentah, bukan tebakan.
+        if abs(tilt_val) > self._TILT_CMD_THRESHOLD * 0.5:
+            if _now - self._tilt_diag_last > 0.15:
+                self._tilt_diag_last = _now
+                _would_side = "right" if tilt_val > 0 else "left"
+                _roll_ok = self._is_roll_dominant(gyro_vec)
+                print(f"  [TILT] val={tilt_val:+.3f} thr={self._TILT_CMD_THRESHOLD:.3f} "
+                      f"side_if_pass={_would_side} gyro=({gx:+.1f},{gy:+.1f},{gz:+.1f}) "
+                      f"gyro_axis_calib={self._tilt_gyro_axis} roll_dominant={_roll_ok} "
+                      f"state={self._tilt_state}")
+
+        if self._tilt_state == "idle":
+            if _now < self._tilt_refractory_until:
+                # Refractory setelah fire sebelumnya — blokir total masuk
+                # "risen" lagi, mencegah rebound kepala kembali ke netral
+                # ter-baca sebagai gesture kedua dari 1 gerakan fisik.
+                #
+                # Re-center SENGAJA TIDAK dievaluasi di sini (return lebih
+                # dulu, sebelum sempat panggil _maybe_recenter_tilt_neutral)
+                # — kalau kepala belum benar-benar kembali netral sempurna
+                # saat settling pasca-fire (mis. masih sedikit miring), dan
+                # itu ikut ter-recenter, baseline akan tertarik ke posisi
+                # yang sedikit miring itu — membuat arah BALIKAN makin mudah
+                # ter-trigger dan arah yang BARU SAJA di-fire makin susah di
+                # sesi berikutnya (feedback loop asimetris, ditemukan lewat
+                # code review, bukan cuma teori).
+                return
+            if not self._tilt_rearmed:
+                # DITEMUKAN LEWAT LOG NYATA: timer refractory (1.5s) SAJA
+                # tidak cukup — kepala butuh waktu VARIABEL untuk benar2
+                # settle balik ke netral pasca-fire (fisik manusia, bukan
+                # konstan). Log menunjukkan tilt_val masih naik ke arah
+                # BERLAWANAN (mis. fire kiri, lalu val bergerak ke +0.117,
+                # nyaris lewat threshold KANAN) tepat setelah refractory
+                # numerik habis, padahal gyro rendah (bukan gerakan sengaja)
+                # — residu settling fisik, bukan command baru.
+                #
+                # Fix: re-arm BUKAN cuma soal waktu, tapi syarat tambahan —
+                # tilt_val harus terlihat kembali ke dekat nol (di bawah
+                # _TILT_REARM_THRESHOLD) MINIMAL SEKALI sebelum rise baru
+                # diizinkan, arah manapun. Begitu terlihat dekat nol sekali,
+                # _tilt_rearmed dikunci True dan tidak perlu dicek ulang
+                # sampai fire berikutnya me-reset ke False lagi.
+                #
+                # PENTING — re-center TETAP dipanggil (di bawah, satu kali
+                # per tick — lihat penjelasan di luar blok ini) meski belum
+                # re-armed, SELAMA gyro genuinely rendah (dicek di dalam
+                # _maybe_recenter_tilt_neutral sendiri via _TILT_RECENTER_
+                # GYRO_DPS). Tanpa ini ada risiko deadlock: kalau baseline
+                # sudah bergeser cukup jauh sehingga tilt_val TIDAK PERNAH
+                # turun di bawah _TILT_REARM_THRESHOLD lagi, sistem butuh
+                # recenter untuk pulih — tapi recenter butuh jalur ini untuk
+                # jalan. Memutus ketergantungan melingkar itu: begitu kepala
+                # genuinely diam (syarat recenter), baseline perlahan ditarik
+                # kembali mendekat, yang pada gilirannya membuat tilt_val
+                # turun dan akhirnya memenuhi syarat re-arm secara alami.
+                if (abs(tilt_val) < self._TILT_REARM_THRESHOLD
+                        or _now - self._tilt_last_fire_time > self._TILT_REARM_TIMEOUT_S):
+                    # Timeout fallback: kalau re-arm alami tidak kunjung
+                    # terjadi dalam _TILT_REARM_TIMEOUT_S (mis. baseline
+                    # bergeser sangat jauh dan recenter belum sempat
+                    # mengejar), paksa re-arm saja — trade-off satu
+                    # kemungkinan false-positive lebih baik daripada command
+                    # mati total sampai reconnect manual.
+                    self._tilt_rearmed = True
+                else:
+                    self._maybe_recenter_tilt_neutral(gyro_mag, _now)
+                    return
+            # Re-center dipanggil TEPAT SEKALI per tick di sini — mencakup
+            # baik kasus "sudah re-armed sejak awal tick" (blok if di atas
+            # di-skip total) maupun "baru saja re-armed tick ini" (blok di
+            # atas TIDAK memanggil recenter di cabang sukses, sengaja
+            # dihindari supaya tidak dobel-panggil dalam tick yang sama —
+            # ditemukan lewat code review: dobel panggil saat _tilt_still_
+            # since sudah lewat _TILT_RECENTER_HOLD_S membuat EMA diterapkan
+            # 2× dalam 1 tick, ~9.75% pull alih-alih 5% yang seharusnya).
+            # Re-center HANYA dievaluasi saat idle, di luar refractory, DAN
+            # sudah re-armed (settling pasca-fire sudah genuinely selesai) —
+            # lihat _maybe_recenter_tilt_neutral untuk kenapa ini aman
+            # dilakukan tanpa mengulang kegagalan auto drift-correction
+            # cursor control (_imu_baseline, lihat catatan di
+            # _update_cursor_control soal 2 percobaan yang dibuang).
+            self._maybe_recenter_tilt_neutral(gyro_mag, _now)
+            if (abs(tilt_val) > self._TILT_CMD_THRESHOLD
+                    and self._is_roll_dominant(gyro_vec)
+                    and _tilt_moving_away):
+                self._tilt_state     = "risen"
+                self._tilt_rise_side = "right" if tilt_val > 0 else "left"
+                self._tilt_rise_time = _now
+                self._tilt_rise_peak = abs(tilt_val)
+        elif self._tilt_state == "risen":
+            held_s = _now - self._tilt_rise_time
+            self._tilt_rise_peak = max(self._tilt_rise_peak, abs(tilt_val))
+            # Release RELATIF terhadap puncak yang dicapai selama risen —
+            # DITEMUKAN LEWAT LOG NYATA: gerakan tilt yang KUAT (val naik
+            # sampai 0.14, bahkan >1.0 untuk gerakan sangat cepat) hampir
+            # tidak pernah turun kembali ke ambang absolut tetap (0.055)
+            # dalam window _TILT_CMD_RELEASE_MAX_S=0.8s, karena itu berarti
+            # harus kembali HAMPIR SEPENUHNYA ke netral — proporsinya jauh
+            # lebih ketat untuk gerakan besar dibanding gerakan pas-pasan di
+            # atas threshold. Akibatnya rise SELALU timeout ke idle tanpa
+            # fire, meski gesture jelas terjadi (axis-dominance & arah sudah
+            # benar). Sengaja MURNI relatif (bukan OR dengan ambang absolut
+            # lama) — code review menemukan OR itu justru memberi gerakan
+            # LEMAH (peak pas-pasan di atas threshold) release condition
+            # yang lebih longgar dari sebelumnya (0.6×0.12=0.072 > ambang
+            # lama 0.055), efek samping tak disengaja yang bisa membuat
+            # sustained-hold lemah ikut fire. Murni relatif memberi perilaku
+            # proporsional konsisten untuk semua kekuatan gerakan: harus
+            # turun 40% dari puncaknya sendiri, tidak peduli seberapa besar
+            # puncak itu.
+            _released = abs(tilt_val) < self._tilt_rise_peak * self._TILT_RELEASE_RATIO
+            if _released:
+                if self._TILT_CMD_RELEASE_MIN_S <= held_s <= self._TILT_CMD_RELEASE_MAX_S:
+                    self._fire_tilt_command(self._tilt_rise_side, _now)
+                # Held terlalu singkat (micro-blip) ATAU melewati window
+                # (ditahan lama) — dibuang, bukan command. Kembali idle.
+                self._tilt_state     = "idle"
+                self._tilt_rise_side = ""
+            elif held_s > self._TILT_CMD_RELEASE_MAX_S:
+                # Timeout ditahan terlalu lama tanpa release — bukan quick
+                # tilt (kemungkinan menyandarkan kepala), buang tanpa fire.
+                self._tilt_state     = "idle"
+                self._tilt_rise_side = ""
+
+    def _maybe_recenter_tilt_neutral(self, gyro_mag: float, now: float) -> None:
+        """Koreksi drift _tilt_neutral secara bertahap — dipanggil HANYA saat
+        _tilt_state=="idle" (tidak pernah di tengah gesture "risen").
+
+        Beda filosofi dari auto drift-correction _imu_baseline (cursor
+        control) yang SUDAH DICOBA 2× dan DIBUANG (lihat catatan panjang di
+        _update_cursor_control): cursor control gagal karena TIDAK BISA
+        membedakan "kepala genuinely netral" dari "kepala diam MENAHAN tilt
+        tertentu" — keduanya sama-sama low-variance accel dalam jangka
+        pendek, sehingga baseline mengejar posisi tertahan itu dan membuat
+        target netral "mengembara" tanpa henti.
+
+        Command tilt (di sini) punya sinyal tambahan yang TIDAK dimiliki
+        cursor control: GYRO. Kepala yang genuinely diam punya gyro mendekati
+        nol di SEMUA axis; kepala yang ditahan miring (bahkan diam sempurna
+        dalam arti accel) baru saja SELESAI berputar untuk sampai ke posisi
+        itu — tapi karena re-center ini hanya jalan saat _tilt_state=="idle"
+        (bukan "risen"), kasus "baru saja tilt dan sedang menahan" sudah
+        tidak relevan: begitu _TILT_CMD_RELEASE_MAX_S (0.8s) terlewati tanpa
+        release, state SUDAH kembali ke "idle" (dibuang, dianggap bukan
+        command) — jadi menahan-tilt-lama tetap dianggap "idle" di titik ini,
+        SAMA seperti benar-benar netral. Ini bukan celah baru: menahan tilt
+        lama memang sudah didesain untuk tidak fire (lihat komentar rise
+        blok di _update_tilt_command), jadi mengizinkannya ikut ter-recenter
+        konsisten dengan perilaku yang sudah ada, bukan regresi.
+
+        EMA lambat (bukan snapshot instan) — tiap re-center menggeser
+        _tilt_neutral sedikit ke arah posisi accel saat ini, bukan lompat
+        langsung, supaya tidak ada perubahan baseline mendadak yang terasa
+        aneh kalau user langsung tilt lagi persis setelah re-center."""
+        if gyro_mag >= self._TILT_RECENTER_GYRO_DPS:
+            # Sedang bergerak (meski di bawah _GYRO_GATE_DPS) — bukan
+            # kandidat "diam", reset penghitung durasi diam.
+            self._tilt_still_since = None
+            return
+        if self._tilt_still_since is None:
+            self._tilt_still_since = now
+            return
+        if now - self._tilt_still_since >= self._TILT_RECENTER_HOLD_S:
+            old = np.array(self._tilt_neutral)
+            new = old * (1 - self._TILT_RECENTER_EMA_ALPHA) + \
+                  np.array(self._latest_acc) * self._TILT_RECENTER_EMA_ALPHA
+            self._tilt_neutral = tuple(new)
+            # Tidak reset _tilt_still_since — biarkan re-center lanjut
+            # bertahap tiap tick selama user tetap diam, EMA alpha kecil
+            # sudah membuat perubahan per-tick sangat halus (bukan lompatan).
+
+    def _is_roll_dominant(self, gyro_vec: tuple) -> bool:
+        """True kalau axis gyro roll hasil kalibrasi (_tilt_gyro_axis) yang
+        paling dominan SAAT INI, dan cukup dominan dibanding axis kedua
+        terbesar (_TILT_GYRO_DOMINANCE). Dipakai menolak menoleh/mengangguk
+        yang kebetulan proyeksi accel-nya lolos threshold tilt."""
+        if self._tilt_gyro_axis is None:
+            # Kalibrasi gyro tidak berhasil merekam sample (kasus langka) —
+            # tidak ada dasar untuk menolak, biarkan lolos (fallback ke
+            # perilaku lama: hanya accel yang menentukan).
+            return True
+        mags = [abs(gyro_vec[0]), abs(gyro_vec[1]), abs(gyro_vec[2])]
+        roll_mag = mags[self._tilt_gyro_axis]
+        if roll_mag < self._TILT_GYRO_MIN_DPS:
+            # Rotasi terlalu kecil untuk dinilai — bukan berarti BUKAN roll,
+            # tapi juga tidak cukup bukti bahwa ITU roll. Tolak supaya sisi
+            # aman (kurangi false positive) daripada asumsikan valid.
+            return False
+        others = [m for i, m in enumerate(mags) if i != self._tilt_gyro_axis]
+        second_largest = max(others) if others else 0.0
+        return roll_mag >= second_largest * self._TILT_GYRO_DOMINANCE
+
+    def _fire_tilt_command(self, side: str, now: float) -> None:
+        """Guard cross-trigger sebelum fire — sinyal accel/gyro sudah
+        orthogonal terhadap EMG (channel & sensor beda total), tapi tilt
+        kuat tetap bisa menggoyang elektroda dan memicu artefak EMG palsu
+        di AF7/AF8 — maka tilt tetap dimasukkan ke global mutex & pairwise
+        cooldown yang sama dipakai wink/eyebrow/jaw, bukan cuma cooldown
+        sendiri, supaya command lain tidak ikut kesenggol atau sebaliknya."""
+        _cmd_idle    = (now - self._last_cmd_time) > 1.5
+        _after_wink  = (now - self._wink_cooldown) < 1.5
+        _after_jaw   = (now - self._jaw_cooldown) < 2.5
+        _after_eb    = (now - self._eyebrow_cooldown) < 3.0
+        _own_cd_ok   = (now - self._tilt_cooldown) > self._TILT_CMD_COOLDOWN_S
+
+        if not (_cmd_idle and not _after_wink and not _after_jaw
+                and not _after_eb and _own_cd_ok):
+            return
+
+        self._tilt_cooldown = now
+        self._last_cmd_time = now
+        # Refractory: blokir masuk state "risen" lagi sampai durasi ini,
+        # dicek di _update_tilt_command SEBELUM rise diizinkan (bukan cuma
+        # dicek di titik fire seperti _tilt_cooldown) — mencegah rebound
+        # kepala kembali ke netral setelah fire ter-baca sebagai rise kedua
+        # yang valid, menghasilkan trigger dobel dari 1 gerakan fisik.
+        self._tilt_refractory_until = now + self._TILT_CMD_REFRACTORY_S
+        # Re-arm dikunci False — rise baru (arah manapun) diblokir sampai
+        # tilt_val terlihat dekat nol (settling genuinely selesai) minimal
+        # sekali, DI ATAS timer refractory (lihat _TILT_REARM_THRESHOLD di
+        # _update_tilt_command). Menutup celah rebound/overshoot fisik yang
+        # durasinya variabel, ditemukan dari log testing nyata.
+        self._tilt_rearmed = False
+        self._tilt_last_fire_time = now   # dasar hitung _TILT_REARM_TIMEOUT_S
+        cb = self.on_tilt_left if side == "left" else self.on_tilt_right
+        print(f"↩️  Tilt {side} FIRED — val_thr={self._TILT_CMD_THRESHOLD}")
+        if cb:
+            try:
+                cb()
+            except Exception as e:
+                print(f"⚠️  on_tilt_{side} error: {e}")
 
     def _update_cursor_control(self) -> None:
         """Dipanggil tiap tick _imu_loop (~50Hz) saat cursor_control_enabled.

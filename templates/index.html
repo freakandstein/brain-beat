@@ -143,6 +143,21 @@ body {
     gap: 6px;
     margin-top: 10px;
 }
+#tilt-calib-banner {
+    display: none;
+    font-family: 'Courier New', monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 5px 10px;
+    border-radius: 5px;
+    border: 1px solid #38bdf8;
+    background: #16232e;
+    color: #38bdf8;
+    margin-top: 8px;
+    animation: blink 1.0s infinite;
+}
+#tilt-calib-banner.show { display: block; }
 .bci-device-list {
     display: flex;
     flex-direction: column;
@@ -609,6 +624,7 @@ body {
     <button id="mute-btn" onclick="muteBtnClick()">&#x1F50A; Mute</button>
     <button id="cursor-btn" onclick="cursorBtnClick()">&#x1F5B1; Cursor: OFF</button>
   </div>
+  <div id="tilt-calib-banner">&#x27A1;&#xFE0F; Miringkan kepala ke KANAN (mantap), lalu kembali tegak — ULANGI 3x dengan jeda santai di antaranya (kalibrasi tilt command)...</div>
 
 </div><!-- /container -->
 
@@ -664,6 +680,7 @@ const CALIB_INSTRUCTIONS = {
 };
 let cursorControlEnabled = false;
 let cursorCalibPhase     = 'idle';
+let tiltCalibPhase       = 'idle';   // kalibrasi otomatis tilt_left/tilt_right, lihat state_update handler
 
 function renderCursorBtn() {
   const btn = document.getElementById('cursor-btn');
@@ -687,6 +704,24 @@ socket.on('state_update', (d) => {
   if (d.cursor_calib_phase && d.cursor_calib_phase !== cursorCalibPhase) {
     cursorCalibPhase = d.cursor_calib_phase;
     renderCursorBtn();
+  }
+
+  // Kalibrasi tilt_left/tilt_right — otomatis sesaat setelah connect (lihat
+  // MuseConnector._run_tilt_calibration). Tanpa banner ini user tidak tahu
+  // kapan harus tilt kanan, sehingga kalibrasi selalu jatuh ke fallback axis
+  // yang salah. Banner tampil sepanjang fase "right" (bisa ~10-30s karena
+  // sekarang butuh 3 sample terpisah, bukan cuma 1x), lalu hilang sendiri
+  // begitu phase pindah ke "ready". tilt_calib_progress ("N/3") ditampilkan
+  // di banner supaya user tahu ini masih berjalan / harus diulang, bukan
+  // macet — tanpa ini durasi panjang terasa seperti sistem hang.
+  if (d.tilt_calib_phase && d.tilt_calib_phase !== tiltCalibPhase) {
+    tiltCalibPhase = d.tilt_calib_phase;
+    document.getElementById('tilt-calib-banner').classList.toggle('show', tiltCalibPhase === 'right');
+  }
+  if (tiltCalibPhase === 'right' && typeof d.tilt_calib_progress === 'string') {
+    const _progressSuffix = d.tilt_calib_progress ? ` [${d.tilt_calib_progress}]` : '';
+    document.getElementById('tilt-calib-banner').innerHTML =
+      '&#x27A1;&#xFE0F; Miringkan kepala ke KANAN (mantap), lalu kembali tegak — ULANGI 3x dengan jeda santai di antaranya (kalibrasi tilt command)...' + _progressSuffix;
   }
 
   const sp = d.spectrum_pos ?? 0.2;

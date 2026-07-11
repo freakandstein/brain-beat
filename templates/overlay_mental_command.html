@@ -185,6 +185,8 @@
   .leg-relax      { color: #7cff6b; }
   .leg-sep        { color: #ffffff33; margin: 2px 0; border: none; border-top: 1px solid #ffffff18; }
   .leg-double-jaw  { color: #ffb347; }
+  .leg-tilt-left  { color: #a78bfa; }
+  .leg-tilt-right { color: #818cf8; }
 
   /* ── Keymap panel (bottom-left, dynamic hotkey mapping) ── */
   #keymap-panel {
@@ -267,6 +269,9 @@
   <div class="leg-relax">● Eyebrow raise → Cmd C (EMG, AF7/AF8)</div>
   <hr class="leg-sep">
   <div class="leg-double-jaw">●● Double jaw → Cmd D</div>
+  <hr class="leg-sep">
+  <div class="leg-tilt-left">● Tilt left → Cmd E1 (ACC/GYRO)</div>
+  <div class="leg-tilt-right">● Tilt right → Cmd E2 (ACC/GYRO)</div>
 </div>
 
 <!-- Keymap panel: mental command → keyboard hotkey -->
@@ -291,6 +296,14 @@
   <div class="keymap-row" data-command="double_jaw">
     <span>Double Jaw</span>
     <button class="keymap-key" data-command="double_jaw" onclick="startKeyCapture(this)">—</button>
+  </div>
+  <div class="keymap-row" data-command="tilt_left">
+    <span>Tilt Left</span>
+    <button class="keymap-key" data-command="tilt_left" onclick="startKeyCapture(this)">—</button>
+  </div>
+  <div class="keymap-row" data-command="tilt_right">
+    <span>Tilt Right</span>
+    <button class="keymap-key" data-command="tilt_right" onclick="startKeyCapture(this)">—</button>
   </div>
 </div>
 
@@ -677,11 +690,12 @@ function stopFx() {
 // ── Readout animation ─────────────────────────────────────────────────────────
 let readoutTimer = null;
 
-function animateReadout(conf, lat, pow) {
+function animateReadout(conf, lat, pow, powUnit) {
+  powUnit = powUnit || 'μV';
   clearTimeout(readoutTimer);
   document.getElementById('rd-conf').textContent = '---%';
   document.getElementById('rd-lat').textContent  = '---ms';
-  document.getElementById('rd-pow').textContent  = '---μV';
+  document.getElementById('rd-pow').textContent  = '---' + powUnit;
   document.getElementById('rf-conf').style.width = '0%';
   document.getElementById('rf-lat').style.width  = '0%';
   document.getElementById('rf-pow').style.width  = '0%';
@@ -689,7 +703,7 @@ function animateReadout(conf, lat, pow) {
   readoutTimer = setTimeout(() => {
     document.getElementById('rd-conf').textContent = conf + '%';
     document.getElementById('rd-lat').textContent  = lat + 'ms';
-    document.getElementById('rd-pow').textContent  = pow + 'μV';
+    document.getElementById('rd-pow').textContent  = pow + powUnit;
     document.getElementById('rf-conf').style.width = conf + '%';
     document.getElementById('rf-lat').style.width  = Math.round(100 - lat) + '%';
     document.getElementById('rf-pow').style.width  = Math.min(100, Math.round(pow * 1.5)) + '%';
@@ -746,6 +760,24 @@ const COMMANDS = {
     conf: 83, lat: 22, pow: 35,
     combo: false,
   },
+  tilt_left: {
+    hue: 258, accent: '#a78bfa', glow: '#8b5cf6', accentDim: '#a78bfa44',
+    label: 'ACC / GYRO',
+    main:  'TILT LEFT',
+    sub:   'head roll · quick tilt-and-release',
+    channels: [],
+    conf: 88, lat: 14, pow: 68, powUnit: 'mg',
+    combo: false,
+  },
+  tilt_right: {
+    hue: 272, accent: '#818cf8', glow: '#6366f1', accentDim: '#818cf844',
+    label: 'ACC / GYRO',
+    main:  'TILT RIGHT',
+    sub:   'head roll · quick tilt-and-release',
+    channels: [],
+    conf: 88, lat: 14, pow: 68, powUnit: 'mg',
+    combo: false,
+  },
   // ── Combo commands ──
   double_jaw: {
     hue: 35, accent: '#ffb347', glow: '#ff8c00', accentDim: '#ffb34744',
@@ -790,7 +822,7 @@ function triggerOverlay(commandKey) {
 
   // randomise readout values slightly for realism
   const jitter = n => n + Math.round((Math.random() - 0.5) * 6);
-  animateReadout(jitter(cmd.conf), jitter(cmd.lat), jitter(cmd.pow));
+  animateReadout(jitter(cmd.conf), jitter(cmd.lat), jitter(cmd.pow), cmd.powUnit);
   setActiveDots(cmd.channels);
 
   clearTimeout(hideTimer);
@@ -827,8 +859,10 @@ socket.on('wink_right',     () => triggerOverlay('wink_right'));
 socket.on('jaw_clench',     () => triggerOverlay('jaw_clench'));
 socket.on('eyebrow_raise',  () => triggerOverlay('eyebrow_raise'));
 socket.on('double_jaw',     () => triggerOverlay('double_jaw'));
+socket.on('tilt_left',      () => triggerOverlay('tilt_left'));
+socket.on('tilt_right',     () => triggerOverlay('tilt_right'));
 
-// Dev keys: Shift+1 … Shift+5
+// Dev keys: Shift+1 … Shift+7
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const tag = (e.target && e.target.tagName) || '';
@@ -839,6 +873,8 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Digit3') triggerOverlay('jaw_clench');
   if (e.code === 'Digit4') triggerOverlay('eyebrow_raise');
   if (e.code === 'Digit5') triggerOverlay('double_jaw');
+  if (e.code === 'Digit6') triggerOverlay('tilt_left');
+  if (e.code === 'Digit7') triggerOverlay('tilt_right');
 });
 
 // ── Keymap panel: capture a key and send it to the server ─────────────────
