@@ -31,6 +31,11 @@ class OBSConnector:
         "wink_right":    "Scene 1 (2 Views Without Top)",
         "jaw_clench":    "Scene 2 (3 Views)",
         "eyebrow_raise": "Scene 3 (2 Views Without Front)",
+        # tilt_left dipasangkan sama persis dengan wink_right (scene sama).
+        "tilt_left":     "Scene 1 (2 Views Without Top)",
+        # tilt_right TIDAK switch scene — murni keystroke Command+B (lihat
+        # eeg_server.py _tilt_right_cb), None → switch_scene() no-op.
+        "tilt_right":    None,
     }
 
     def __init__(

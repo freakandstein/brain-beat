@@ -14,7 +14,7 @@ Muse 2 (Bluetooth BLE)
     ↓  auto-reconnect with backoff (3s → 5s → 10s → 15s) on drop
 BrainFlow DataFilter — PSD Welch, band power θ/α/β
     ↓  2-pass EMG rejection (frontal + temporal)
-    ↓  Mental Command detection (5 gestures — see below)
+    ↓  Mental Command detection (7 gestures — see below)
     ↓  Rolling normalization p10–p90 + EMA 0.20
 Mental State Classifier — arousal = 0.50β − 0.30α − 0.20TBR
     ↓  flow_score = frontal_α + frontal_θ − β  (AF7/AF8)
@@ -26,30 +26,33 @@ Brainwave Monitor — FluidSynth GM ch9
     ↓  TENSE: battle drums (95–135 BPM)
 Flask-SocketIO (port 8765)
     ↓  /                        → BrainWave Monitor overlay (OBS Browser Source)
-    ↓  /overlay/mental-command  → Mental Command Playground (5-command demo overlay)
-    ↓  wink_left / wink_right / jaw_clench / eyebrow_raise / double_jaw events → full-screen visual FX per command
+    ↓  /overlay/mental-command  → Mental Command Playground (7-command demo overlay)
+    ↓  wink_left / wink_right / jaw_clench / eyebrow_raise / double_jaw / tilt_left / tilt_right events → full-screen visual FX per command
 Cursor Control Mode (optional, toggle in UI)
     ↓  Muse 2 accelerometer/gyroscope — head-tilt joystick moves the OS mouse cursor
     ↓  jaw clench re-purposed as left-click while this mode is ON (scene switching disabled)
+    ↓  mutually exclusive with tilt_left/tilt_right (both use the same IMU signal)
 ```
 
 ---
 
 ## Features
 
-### Mental Command Playground — 5 Active Commands
+### Mental Command Playground — 7 Active Commands
 
-Five distinct gestures trigger a full-screen visual FX overlay at `/overlay/mental-command`, each using different electrodes and signal modalities:
+Seven distinct gestures trigger a full-screen visual FX overlay at `/overlay/mental-command`, each using different electrodes/sensors and signal modalities:
 
-| Command | Gesture | Channel | Detection Logic |
+| Command | Gesture | Channel/Sensor | Detection Logic |
 |---|---|---|---|
 | **A1 — Wink Left** | Kedip mata kiri | AF7 dominant | Strong side >thr_wink (adaptive, default 800µV), asymmetry ratio >2.0×, weak side (AF8) 1–400µV, AF7 ≥ AF8 |
 | **A2 — Wink Right** | Kedip mata kanan | AF8 dominant | Same as Wink Left but AF8 > AF7 (`_wink_eye` picks the dominant channel) |
 | **B — Jaw Clench** | Katupkan rahang | TP9 / TP10 | EMG envelope (RMS, ~300ms tail) >thr_jaw (adaptive, default 520µV), rising-edge triggered, fires ~1.5s after release (composer decide window) |
 | **C — Eyebrow Raise** | Angkat alis | AF7 / AF8 | Both channels valid + bilateral (both >thr_eyebrow adaptive, ratio <3.0), sustained ≥3 ticks, tolerant of 1 isolated noisy tick |
 | **D — Double Jaw Clench** | Katupkan rahang 2× cepat berurutan | TP9 / TP10 | Same detector as Jaw Clench, but counts 2 rising edges within the 1.5s composer decide window (`GestureComposer`) instead of 1 — toggles OBS recording start/stop instead of a scene switch |
+| **E — Tilt Left** | Miringkan kepala ke kiri (telinga → bahu), lalu kembali tegak | Accelerometer + gyroscope | Quick tilt-and-release, roll-axis-only (see below) |
+| **F — Tilt Right** | Miringkan kepala ke kanan (telinga → bahu), lalu kembali tegak | Accelerometer + gyroscope | Same detector, opposite sign of the calibrated axis |
 
-**Key design insight**: all gestures use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*. A global mutex (`_last_cmd_time`, 1.5s) plus per-pair cooldown guards (up to 5s) prevent cross-triggering. Observed accuracy: ~90%.
+**Key design insight**: all gestures use fundamentally different signal dimensions — wink uses *left-right asymmetry*, jaw clench uses *dedicated temporal channels*, eyebrow raise uses *bilateral symmetry + sustained duration*, tilt uses *IMU motion* (orthogonal to all EMG-based commands). A global mutex (`_last_cmd_time`, 1.5s) plus per-pair cooldown guards (up to 5s) prevent cross-triggering. Observed accuracy: ~90%.
 
 **Wink left vs right**: the wink detector already computed which channel dominates (`_wink_eye = "left" if AF7 ≥ AF8 else "right"`) for logging, but originally fired a single generic `on_wink` callback regardless of side. It now dispatches to `on_wink_left` or `on_wink_right` based on `_wink_eye`, so the two sides are independent commands with their own overlay color and OBS scene mapping — no change to the underlying asymmetry detection itself.
 
@@ -65,18 +68,20 @@ Five distinct gestures trigger a full-screen visual FX overlay at `/overlay/ment
 
 **Adaptive EMG threshold**: during the first ~15 seconds of each session, the connector measures resting EMG noise on frontal (AF7/AF8) and temporal (TP9/TP10) channels. Thresholds are computed as `median_baseline × multiplier` and clamped to a safe range, replacing the hardcoded defaults for the rest of the session. Printed to terminal as `✅ EMG calibration done`.
 
-To test without a Muse: open `/overlay/mental-command` and press **Shift+1** through **Shift+5**.
+**Tilt Left/Right — quick tilt-and-release, IMU-based (not EEG)**: a head "roll" gesture — tilting the ear toward the shoulder and back to upright — detected from the Muse 2's accelerometer + gyroscope, orthogonal to every EMG-based command above (no shared electrode, no shared sensor). Runs its own **multi-sample calibration** automatically once per connect (browser banner prompts "tilt right, repeat 3×"): the user repeats a tilt-right motion until 3 *consistent* samples are collected (cosine similarity ≥0.85 to the running average) — samples that are too weak or point in an inconsistent direction are silently discarded and re-requested, with no time limit, because early versions that accepted a single reference tilt (or capped retries) produced an unstable calibrated axis/direction that varied session to session. See `BRAINWAVE_MONITOR.md` → "Command E/F — Tilt Left / Tilt Right" for the full detection state machine (axis-dominance guard, direction/re-arm logic, auto re-centering).
 
-**Custom keymap**: each command can be remapped to any OS keystroke (including modifier combos like `cmd+r`) from the keymap panel on `/overlay/mental-command` — click a command's key button, then press the combo. Saved to `keymap.json` and sent via `pynput` (`keyboard_connector.py`) whenever that command fires.
+To test without a Muse: open `/overlay/mental-command` and press **Shift+1** through **Shift+7**.
+
+**Custom keymap**: each command can be remapped to any OS keystroke (including modifier combos like `cmd+r`) from the keymap panel on `/overlay/mental-command` — click a command's key button, then press the combo. Saved to `keymap.json` and sent via `pynput` (`keyboard_connector.py`) whenever that command fires. Tilt Right defaults to `cmd+b` (keystroke only, no OBS scene); Tilt Left defaults to the same OBS scene as Wink Right.
 
 ### Cursor Control Mode (Head-Tilt Joystick)
 
-An optional mode that repurposes the Muse 2's onboard accelerometer/gyroscope (previously unused) to move the OS mouse cursor by tilting the head, with jaw clench as left-click. Toggled from a button in the main UI — **off by default**, and mutually exclusive with the jaw-clench mental command above:
+An optional mode that repurposes the Muse 2's onboard accelerometer/gyroscope (previously unused) to move the OS mouse cursor by tilting the head, with jaw clench as left-click. Toggled from a button in the main UI — **off by default**, and mutually exclusive with the jaw-clench mental command *and* the Tilt Left/Right commands above (same IMU signal — Tilt Left/Right detection is fully disabled while this mode is ON):
 
 | Mode | Jaw clench behavior | Head tilt |
 |---|---|---|
-| **OFF** (default) | OBS scene switch + keystroke (unchanged) | No effect |
-| **ON** | Left-click at current cursor position (scene/keystroke suppressed) | Moves the cursor — velocity/joystick style |
+| **OFF** (default) | OBS scene switch + keystroke (unchanged) | Tilt Left/Right commands active (quick tilt-and-release) |
+| **ON** | Left-click at current cursor position (scene/keystroke suppressed) | Moves the cursor — velocity/joystick style; Tilt Left/Right commands suppressed |
 
 **Velocity-based control, not absolute position**: tilt angle maps to cursor *speed* in that direction (dead-zone + gentle exponential curve up to a clamped max speed), not to an absolute screen position. A level head means zero velocity — the cursor simply stops wherever it is, with no drift.
 
@@ -263,10 +268,11 @@ TP9                TP10  ← Temporal (cleaner beta signal)
 | Brainwave Monitor drum engine (FluidSynth) | ✅ |
 | OBS overlay UI (index.html) | ✅ |
 | Eyebrow raise detection + overlay FX | ✅ |
-| Mental Command Playground (5 commands) | ✅ |
+| Mental Command Playground (7 commands) | ✅ |
 | Wink left/right detection (unilateral EOG asymmetry, split by dominant channel) | ✅ |
 | Jaw clench detection (temporal EMG, RMS short-tail envelope) | ✅ |
 | Double jaw clench detection (GestureComposer edge counting) | ✅ |
+| Tilt left/right detection (IMU quick tilt-and-release, multi-sample calibration) | ✅ |
 | OBS scene switching via mental commands | ✅ |
 | OBS recording start/stop toggle via double jaw clench | ✅ |
 | Custom keymap per mental command (modifier combos supported) | ✅ |

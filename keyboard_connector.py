@@ -45,6 +45,7 @@ DEFAULT_KEYMAP = {
     "eyebrow_raise": "up",
     "jaw_clench":    "down",
     "double_jaw":    "space",
+    "tilt_right":    "cmd+b",
 }
 
 

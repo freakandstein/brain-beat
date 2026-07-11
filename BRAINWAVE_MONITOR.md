@@ -79,7 +79,7 @@ Open browser: **http://localhost:8765**
 
 ## Mental Command Detection
 
-Five active commands are detected in real-time, each using distinct signal dimensions to avoid cross-triggering.
+Seven active commands are detected in real-time, each using distinct signal dimensions to avoid cross-triggering.
 
 ### Command A1/A2 — Wink Left / Wink Right (`on_wink_left` / `on_wink_right`)
 
@@ -146,6 +146,105 @@ Cooldown     : 3 seconds
 
 **Sustained streak tuning — 3-tick-strict → 2-tick → 3-tick-with-tolerance**: the original rule (3 ticks bilateral, reset to 0 on any single miss) essentially never fired — real logs showed the streak repeatedly building to 2 and dropping to 0 right before reaching 3, because of one noisy tick in the middle of a genuine raise. Lowering the requirement to 2 ticks made eyebrow raise fire reliably, but logs then showed it firing on brief microexpressions/twitches (~300ms, well under a deliberate raise) — those still had strong, clearly bilateral amplitude (1000–2000µV against an 80–400µV threshold), so amplitude wasn't the issue, duration was. The fix: keep the 3-tick requirement, but track consecutive *misses* (`_eyebrow_miss`) separately from the streak, and only reset the streak once 2 misses happen in a row. A single noisy tick mid-gesture no longer wipes out an otherwise-genuine sustained raise, but a brief twitch still can't accumulate 3 ticks fast enough to fire. The jaw-artefact reset (temporal EMG active, or recent jaw cooldown) is exempt from this tolerance — it still resets the streak immediately, since that boundary needs to stay strict to avoid eyebrow "stealing" jaw clench artefacts.
 
+### Command E/F — Tilt Left / Tilt Right (`on_tilt_left` / `on_tilt_right`)
+
+```
+Sensor       : accelerometer + gyroscope (IMU), NOT EEG — orthogonal to every
+               EMG command above (no shared electrode, no shared sensor)
+Signal       : tilt_val = dot(latest_acc - tilt_neutral, tilt_calib_vec)
+Rise         : |tilt_val| > 0.11 AND is_roll_dominant() AND moving_away_from_neutral()
+Release      : |tilt_val| falls below 0.6 × the peak reached during "risen"
+               (relative to that gesture's own peak, not a fixed absolute value)
+Window       : rise→release must complete within 0.12s–0.8s (else discarded, no fire)
+Side         : "right" if tilt_val > 0 else "left"
+Guard        : NOT during Cursor Control Mode (mutually exclusive, same IMU signal)
+Cooldown     : 1.5s global mutex + re-arm gate (see below)
+```
+
+A head **roll** gesture — tilting the ear toward the shoulder and back upright, *not* turning the head side to side (yaw) or nodding (pitch). Detected in the same `_imu_loop` (~50Hz) that drives Cursor Control Mode, but only when that mode is OFF.
+
+**Why this took many iterations to get right**: unlike the EMG commands above (tuned in a handful of passes), tilt detection went through roughly a dozen real-device debugging cycles because IMU-based gesture detection has failure modes EMG amplitude thresholds don't — direction sign, rotation axis, and motion-vs-position all needed separate fixes. Each subsection below documents one specific bug found from real session logs, in the order they were found, because the fixes build on each other.
+
+**1. Multi-sample calibration (not a single reference tilt)**
+
+Calibration runs once automatically after connect (browser banner: "tilt right, repeat 3× with a relaxed pause between each"). It collects `_CALIB_SAMPLE_COUNT = 3` **separate** successful tilt-right attempts and averages them, rather than trusting a single gesture:
+
+```
+for each attempt (no retry limit — keeps going until 3 GOOD samples are collected):
+    record accel+gyro continuously for 2.0s (not a single snapshot)
+    peak_idx = index of MAXIMUM accel deviation from neutral during that window
+    cand_dev, cand_norm = accel deviation, magnitude at peak_idx
+    if cand_norm < 0.25 (_MIN_DEV_NORM): discard, retry — motion too weak/unclear
+    cand_dir = normalize(cand_dev)
+    if collected samples exist:
+        cos_sim = dot(cand_dir, normalize(mean(collected directions)))
+        if cos_sim < 0.85 (_CALIB_CONSISTENCY_MIN_DOT): discard, retry — inconsistent direction
+    accept sample → collected_dirs.append(cand_dir)
+    gyro_peak_idx = index of MAXIMUM gyro magnitude during the same 2.0s window
+    collected_axes.append(dominant gyro axis in a small window around gyro_peak_idx)
+
+tilt_calib_vec = normalize(mean(collected_dirs))          # average direction
+tilt_gyro_axis = mode(collected_axes)                       # majority-vote axis
+```
+
+**Why average 3 samples instead of trusting 1**: real testing showed a single reference tilt was too sensitive to per-gesture variance (speed, angle, a slight overshoot on the way back to neutral) — the resulting `tilt_calib_vec` and `tilt_gyro_axis` weren't stable session to session even with visually-identical headset placement and gestures, causing false-positive/false-negative patterns that kept changing shape after each targeted fix. Averaging 3 independently-collected samples is far more resistant to any single sample being unrepresentative.
+
+**Why no retry limit, and why `_MIN_DEV_NORM` was raised 0.08 → 0.25**: an earlier version capped retries and accepted any sample above a low bar (0.08). A real log showed a sample with `norm=0.085` — barely above that bar, essentially noise — get accepted and averaged in alongside two genuine samples, corrupting the final direction. Per explicit user direction ("don't put a time limit on it, keep going until it's actually correct"), the retry cap was removed entirely and the acceptance bar raised to 0.25 (a clearly deliberate tilt), so calibration now takes as long as it takes but only accepts real gestures.
+
+**Why a consistency check on top of the norm check**: raising `_MIN_DEV_NORM` alone doesn't catch a sample that's strong *and* wrong — e.g. a clean but different motion (the same log run that had `norm=0.085` also showed a `dominant_axis` disagreement between samples, `[0, 2, 2]`, meaning one sample was measuring a physically different rotation than the other two). Comparing each new sample's direction against the running average (cosine similarity ≥0.85, ≈32° tolerance) rejects a sample whose direction doesn't match what's already been collected, before it can corrupt the average — while still being loose enough to admit normal human repeat-gesture variance (typically >0.95 cosine similarity for the same real gesture).
+
+**2. Direction (`tilt_calib_vec`) — captured from peak deviation over the full recording window, not a single stable snapshot**
+
+An early version waited for the accelerometer to go *stable* (low variance) then took one snapshot — the same pattern used successfully for Cursor Control Mode's calibration. That approach has a specific failure mode for a quick tilt-and-release gesture: the "stable" window can land exactly on an **overshoot pause** — the user tilts right, swings back past neutral toward left, and pauses there momentarily — which is also low-variance and gets mistaken for the intended position, recording the calibration **backwards**. The fix: record accel continuously for the whole 2-second window and take the point of *maximum* deviation from neutral as the calibration direction — physically, the furthest point from neutral during one deliberate tilt gesture is the peak of that gesture itself; an unintentional overshoot is almost always smaller in amplitude than the deliberate motion that preceded it.
+
+**3. Roll axis (`tilt_gyro_axis`) — captured from peak gyro magnitude, not from the same peak-accel moment**
+
+Even after fixing direction capture, `tilt_gyro_axis` (used by the axis-dominance guard below) kept coming out inconsistent between sessions (sometimes axis 0/X, sometimes axis 2/Z) despite the same headset and gesture. Root cause: the accel-deviation peak (used for direction, above) occurs at the moment the head has **stopped** rotating — the far end of the tilt, where angular velocity is near zero — while the true peak rotation *speed* happens mid-swing, on the way toward that position. Taking a gyro-axis reading centered on the accel peak was therefore sampling near-zero/noisy rotation, not the real motion. The fix searches the same recording window independently for its own point of *maximum gyro magnitude* (not the accel peak's index) and determines the dominant axis from a small window around that point instead.
+
+**4. Axis-dominance guard — rejects yaw/pitch that happens to also cross the tilt threshold**
+
+```
+is_roll_dominant():
+    roll_mag = |gyro on tilt_gyro_axis|
+    if roll_mag < 5.0 dps (_TILT_GYRO_MIN_DPS): reject — rotation too small to judge
+    reject unless roll_mag >= 1.15 × (largest gyro reading on any OTHER axis)
+```
+
+A pure head turn (yaw) or nod (pitch) can still produce an `accel` deviation that crosses the tilt threshold — the calibrated direction vector isn't perfectly orthogonal to every other possible head motion — but its gyro reading will be dominant on a *different* axis than the calibrated roll axis. This guard checks the live gyro reading at the moment of a candidate rise and rejects it if the dominant rotation isn't on the calibrated roll axis. `_TILT_GYRO_MIN_DPS` was lowered 15.0 → 5.0 dps after logs showed genuine *slow* deliberate tilts (held, not snapped) sometimes have peak angular velocity as low as 3–5 dps — the original 15.0 threshold rejected real slow gestures as "rotation too small." `_TILT_GYRO_DOMINANCE` was lowered 1.5 → 1.15 after logs showed genuine tilts with a dominance ratio as low as ~1.4× (a human head rarely rotates purely around one axis) — 1.5 rejected real gestures; 1.15 was chosen with margin below the observed 1.4× floor since it came from a single data point, not deemed the true minimum.
+
+**5. Direction-of-motion guard — rejects the head returning to neutral, at any speed**
+
+The most persistent false-positive: after any tilt attempt (successful or not), the head returning toward neutral — however slowly — could itself cross the rise threshold on the way past a point where `|tilt_val|` happened to be increasing relative to a moment prior, especially at faster/oscillating return speeds. The system had no notion of *direction of travel*, only instantaneous position. The fix tracks a short rolling window (`_TILT_MOVING_AWAY_WINDOW_N = 5` samples, ~100ms) of `|tilt_val|` and only allows a rise if the current value exceeds the **minimum** value seen in that window plus a small epsilon (`_TILT_MOVING_AWAY_EPS = 0.006`) — i.e., the signal must be trending away from neutral, not toward it. Using the window minimum (not just the immediately-previous tick) makes this tolerant of 1–2 ticks of natural oscillation during a fast genuine tilt (an earlier version compared only against the prior tick and rejected valid fast tilts whose signal dipped for a single tick mid-rise), while still rejecting any sustained trend back toward zero regardless of how slowly it happens.
+
+**6. Relative (not absolute) release threshold**
+
+An early version required `|tilt_val|` to fall back below a small fixed value (`_TILT_CMD_THRESHOLD × 0.5 = 0.055`) to count as "released." Real logs showed strong/fast tilts (peaking well above threshold, sometimes >1.0) essentially never fall back to that fixed value within the 0.8s release window — a large tilt's rebound doesn't snap all the way back to near-zero that fast — so the gesture would enter "risen" correctly (axis and direction guards both passing) and then simply time out unfired. The fix makes release relative to that gesture's own peak: `_TILT_RELEASE_RATIO = 0.6`, so release fires once the signal drops to 60% of whatever peak it reached, proportional for weak and strong tilts alike (an earlier attempt kept the old absolute check as a fallback `OR` condition, but that gave weak tilts an easier release condition than before by accident — replaced with a purely relative check).
+
+**7. Re-arm gate — closes the gap the fixed-duration refractory left open**
+
+```
+after a fire:
+    tilt_rearmed = False
+    blocked until: |tilt_val| is observed below 0.04 (_TILT_REARM_THRESHOLD) at least once,
+                   OR 6.0s (_TILT_REARM_TIMEOUT_S) have passed since the fire (hard fallback)
+    while un-armed, auto-recentering (see below) still runs, to avoid a deadlock where a
+    drifted baseline never lets tilt_val fall low enough to re-arm naturally
+```
+
+A fixed 1.5s refractory window (`_TILT_CMD_REFRACTORY_S`) alone wasn't enough: real logs showed the head's physical settle-back-to-neutral motion after a fire is variable in duration, and could still be crossing the *opposite* direction's threshold right as the fixed timer expired (e.g. fire left, then the rebound registers as a right-tilt rise moments later). Re-arming now requires *seeing* the signal actually return near neutral, not just waiting a fixed amount of time.
+
+**8. Auto re-centering — closes long-session baseline drift, without repeating a documented Cursor Control failure**
+
+```
+runs only when: state == "idle" AND outside the post-fire refractory window
+if gyro_mag < 5.0 dps (_TILT_RECENTER_GYRO_DPS) held for 1.0s (_TILT_RECENTER_HOLD_S):
+    tilt_neutral = tilt_neutral × 0.95 + latest_acc × 0.05     (slow EMA, per tick)
+```
+
+Cursor Control Mode's own baseline auto-correction was tried and **removed** (see below) because it couldn't distinguish "head genuinely neutral" from "head held steady mid-tilt" — both look like low accelerometer variance over a short window, so the baseline ended up chasing whatever tilt the user happened to be holding. Tilt command detection has a signal Cursor Control's correction didn't use: gyro. A genuinely still head has near-zero rotation on every axis; a head merely *holding* a tilt position only reaches this recentering branch after `_TILT_CMD_RELEASE_MAX_S` (0.8s) has already elapsed without a release, at which point the gesture has already been discarded as "not a quick tilt" by the state machine above — so by the time recentering can run, sustained-hold and genuine-neutral are already the same case by design, not a new ambiguity. Recentering is explicitly skipped during the refractory window after a fire, to avoid a separate feedback loop: if the head hasn't fully settled back to neutral yet and that near-tilted position got recentered as the new "neutral," the just-fired direction would become harder to trigger again and the opposite direction easier — asymmetric drift found during code review, not just theorized.
+
+**Result**: after all 8 fixes above, direction/axis calibration is stable session to session, deliberate tilts of varying speed and strength fire reliably, and head turns/nods/idle drift/return-to-neutral motion don't.
+
 ### Adaptive EMG Threshold (Per-Session Calibration)
 
 During the first ~15 seconds of each session (100 ticks @ 6.7 Hz), resting EMG noise is sampled from all channels. Thresholds are computed from the median baseline and clamped to a safe range:
@@ -170,6 +269,9 @@ Additional cross-fire guards (learned from real-world testing):
 | `_after_wink` | 4 seconds | Eyebrow detector |
 | `_after_jaw` (for eyebrow) | 4 seconds | Eyebrow streak + fire |
 | `_eyebrow_active_until` zone | 1.5s after bilateral activity | Wink (both sides) and jaw |
+| Tilt fire → global mutex | 1.5s | Wink, eyebrow, jaw (tilt joins the same `_last_cmd_time` mutex, since a strong tilt can jostle electrodes and produce a spurious EMG artifact) |
+| Tilt re-arm gate | until signal returns near-neutral or 6.0s | New tilt rise (see Command E/F above — this is in addition to, not instead of, the global mutex) |
+| Cursor Control Mode ON | for the whole session it's ON | Tilt left/right entirely (same IMU signal as the cursor joystick) |
 
 ### Design Principle
 
@@ -178,19 +280,22 @@ All commands use fundamentally different signal dimensions:
 - **Jaw clench** → dedicated *temporal* channels (TP9/TP10), completely separate electrodes
 - **Eyebrow raise** → bilateral frontal activation (both AF7 and AF8 rise together)
 - **Double jaw clench** → same channels as jaw clench, distinguished purely by *edge count within a timing window* (`GestureComposer`), not a different signal dimension
+- **Tilt left/right** → IMU motion (accelerometer + gyroscope), a completely different sensor from every EMG command above — cross-fire with EMG commands is only a concern in the direction of tilt *causing* an electrode artifact, not the reverse, which is why tilt joins the EMG global mutex but EMG commands don't need a tilt-specific guard
 
 The weak-channel boundary (1–400µV) is the key separator between wink and eyebrow: if both sides exceed `thr_eyebrow`, it's bilateral (eyebrow); if only one side is strong with the other below 400µV, it's unilateral (wink). Observed accuracy: ~90% in real-world use.
 
 ### Overlay FX
 
-**`/overlay/mental-command`** — 5-command overlay. Each command has its own color:
+**`/overlay/mental-command`** — 7-command overlay. Each command has its own color:
 - Command A1 (Wink Left): cyan
 - Command A2 (Wink Right): pink
 - Command B (Jaw Clench): orange  
 - Command C (Eyebrow Raise): green
 - Command D (Double Jaw Clench): amber, with a "COMBO SEQUENCE" badge and longer 4s hold
+- Command E (Tilt Left): violet (hue 258) — deliberately a new hue family, distinct from every EMG command, and shows no active channel node (it isn't EEG)
+- Command F (Tilt Right): indigo (hue 272) — same rationale as Tilt Left; readout "Power" is labeled in `mg` (milli-g, accelerometer units) instead of `µV`, since it isn't an EMG signal
 
-Dev test: **Shift+1** through **Shift+5**. Single commands auto-hide after 2.8 seconds; double jaw holds for 4 seconds.
+Dev test: **Shift+1** through **Shift+7**. Single commands auto-hide after 2.8 seconds; double jaw holds for 4 seconds.
 
 ## OBS Scene Switching & Recording Control
 
@@ -203,6 +308,8 @@ Mental commands trigger OBS scene changes via WebSocket v5 (`obs_connector.py`).
 | Jaw Clench | Scene 2 (3 Views) |
 | Eyebrow Raise | Scene 3 (2 Views Without Front) |
 | Double Jaw Clench | not a scene switch — toggles OBS recording instead (see below) |
+| Tilt Left | Scene 1 (2 Views Without Top) — same default as Wink Right |
+| Tilt Right | not a scene switch — sends the `cmd+b` keystroke instead (see `keyboard_connector.py` → `DEFAULT_KEYMAP`) |
 
 Scene names can be changed in `obs_connector.py` → `DEFAULT_SCENE_MAP`.
 
@@ -218,6 +325,10 @@ Connection is established at startup and auto-reconnects if OBS restarts.
 ## Cursor Control Mode (Head-Tilt Joystick)
 
 Repurposes the Muse 2's accelerometer + gyroscope (previously acquired with `acc_enabled=False, gyro_enabled=False` — now both `True`) to move the OS mouse cursor via head tilt, with jaw clench as left-click. Off by default; toggled from a button in `templates/index.html`.
+
+### Mutual Exclusion With Tilt Left/Right
+
+This mode and the Tilt Left/Right mental commands (see "Command E/F" above) consume the *same* IMU signal for different purposes — one as a continuous joystick, the other as a discrete gesture — so they're strictly mutually exclusive, not just cooperatively guarded: `_imu_loop` calls either `_update_cursor_control()` or `_update_tilt_command()` each tick, never both, based on `cursor_control_enabled`. Toggling Cursor Control ON immediately and unconditionally resets any in-progress tilt gesture state back to idle, so a tilt rise that hadn't fired yet doesn't fire later once the mode switches.
 
 ### Mutual Exclusion With Jaw Clench
 
@@ -312,7 +423,7 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - Button state (`mute_state` event) syncs on connect and is styled to match `#bci-btn` (red border/background when muted, same as the green "connected" state)
 
 **Keymap panel** (`/overlay/mental-command`)
-- Each mental command (wink_left, wink_right, eyebrow_raise, jaw_clench, double_jaw) can be remapped to any OS keystroke, including modifier combos (e.g. `cmd+r`)
+- Each mental command (wink_left, wink_right, eyebrow_raise, jaw_clench, double_jaw, tilt_left, tilt_right) can be remapped to any OS keystroke, including modifier combos (e.g. `cmd+r`)
 - Click a command's key button, then press the desired key combo — captured via a capture-phase `keydown` listener that waits for a non-modifier key before committing (so holding Cmd then pressing R correctly resolves to `cmd+r`, not just `cmd`)
 - Saved via `set_keymap` socket event → persisted to `keymap.json` by `keyboard_connector.py`, which sends the keystroke through `pynput` whenever the mapped mental command fires
 
@@ -322,6 +433,8 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - `jaw_clench` → Scene 2 by brain signal
 - `eyebrow_raise` → Scene 3 by brain signal
 - `double_jaw` → no scene switch — toggles OBS recording start/stop, and triggers the overlay FX at `/overlay/mental-command`
+- `tilt_left` → Scene 1 by head tilt (same default scene as wink_right)
+- `tilt_right` → no scene switch — sends `cmd+b` keystroke, and triggers the overlay FX at `/overlay/mental-command`
 
 Compatible with **OBS Browser Source** (stream overlay).
 

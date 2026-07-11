@@ -255,6 +255,8 @@ def _background_updater():
                         "cursor_control": muse.cursor_control_enabled if muse else False,
                         "cursor_baseline_ready": muse._cursor_baseline_ready if muse else False,
                         "cursor_calib_phase": muse.cursor_calib_phase if muse else "idle",
+                        "tilt_calib_phase": muse.tilt_calib_phase if muse else "idle",
+                        "tilt_calib_progress": muse.tilt_calib_progress if muse else "",
                         "cursor_vx": round(muse.cursor_velocity_x, 1) if muse else 0.0,
                         "cursor_vy": round(muse.cursor_velocity_y, 1) if muse else 0.0,
                     }
@@ -334,6 +336,26 @@ def main():
             obs_connector.toggle_record()
             keyboard_connector.press("double_jaw")
 
+        def _tilt_left_cb():
+            # Defense-in-depth: detector di brainflow_connector.py sudah
+            # skip total saat cursor mode ON (lihat _imu_loop), guard ini
+            # cuma jaring kedua supaya command tidak pernah lolos ke OBS/
+            # keyboard walau ada race saat toggle di tengah gerakan.
+            if muse.cursor_control_enabled:
+                return
+            print("↩️  Tilt left detected — triggering overlay")
+            socketio.emit("tilt_left", {})
+            obs_connector.switch_scene("tilt_left")
+            keyboard_connector.press("tilt_left")
+
+        def _tilt_right_cb():
+            if muse.cursor_control_enabled:
+                return
+            print("↩️  Tilt right detected — triggering overlay")
+            socketio.emit("tilt_right", {})
+            obs_connector.switch_scene("tilt_right")
+            keyboard_connector.press("tilt_right")
+
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         muse.on_eyebrow_raise = _eyebrow_cb
         # Wink di-fire langsung dari MuseConnector (tidak lewat composer),
@@ -343,6 +365,10 @@ def main():
         muse.on_wink_right               = _wink_right_cb
         muse.composer.on_jaw_clench      = _jaw_clench_cb
         muse.composer.on_double_jaw      = _double_jaw_cb
+        # tilt_left/tilt_right diaktifkan kembali setelah redesign kalibrasi
+        # multi-sample (3 percobaan dirata-ratakan, lihat _run_tilt_calibration).
+        muse.on_tilt_left                = _tilt_left_cb
+        muse.on_tilt_right               = _tilt_right_cb
         muse.on_cursor_velocity          = mouse_connector.set_velocity
         # Catatan: eyes_closed_relax tidak lagi dipakai playground (diganti
         # eyebrow_raise — gesture cepat & deliberate, lebih konsisten dgn
