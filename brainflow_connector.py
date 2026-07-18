@@ -342,6 +342,25 @@ class MuseConnector:
         self._mac_address  = ""        # stored for auto-reconnect
         self._err_file     = None      # temp file capturing muselsl stderr
 
+        # ── Battery telemetry — via callback_telemetry pada koneksi BLE yang
+        # SAMA dengan EEG (bukan koneksi kedua terpisah). muselsl.stream()
+        # (dipakai _stream_proc untuk EEG/PPG/ACC/GYRO) tidak meneruskan
+        # callback_telemetry ke Muse() yang dibuatnya secara internal, jadi
+        # _launch_and_loop menyuntikkan monkey-patch kecil di script inline
+        # subprocess: bungkus Muse.__init__ supaya callback_telemetry selalu
+        # disisipkan sebelum stream() membuat instance-nya. Battery dicetak
+        # ke stdout subprocess yang sama (dulu DEVNULL, sekarang PIPE) dan
+        # dibaca oleh _stream_stdout_reader_loop.
+        #
+        # Versi sebelumnya membuka SUBPROCESS KEDUA yang connect BLE ke MAC
+        # address yang sama, khusus untuk baca battery — di praktiknya banyak
+        # adapter (termasuk yang dites di macOS ini) menolak 2 koneksi BLE
+        # bersamaan ke headset yang sama, jadi battery_percent selalu None.
+        # Pendekatan callback_telemetry ini menghindari masalah itu sama
+        # sekali karena cuma 1 koneksi BLE yang dipakai.
+        self.battery_percent: Optional[float] = None
+        self._stream_stdout_thread: Optional[threading.Thread] = None
+
     # ── public API ────────────────────────────────────────────────────────
 
     def connect(self, mac_address: str = "") -> None:
@@ -515,6 +534,7 @@ class MuseConnector:
         self._cancel.set()
         self._imu_thread_stop.set()
         self._kill_proc()
+        self.battery_percent = None
         self._history    = {"alpha": [], "beta": [], "theta": [], "tbr": [],
                             "frontal_alpha": [], "frontal_theta": []}
         self.heart_rate  = None
@@ -608,6 +628,30 @@ class MuseConnector:
                     pass
         self._stream_proc = None
 
+    def _stream_stdout_reader_loop(self) -> None:
+        """Baca stdout _stream_proc untuk baris 'BATTERY <val>' yang dicetak
+        oleh callback_telemetry yang disuntikkan lewat monkey-patch di script
+        inline (lihat _launch_and_loop) — berjalan di koneksi BLE yang SAMA
+        dengan EEG, jadi tidak ada risiko penolakan koneksi BLE kedua."""
+        proc = self._stream_proc
+        if not proc or not proc.stdout:
+            return
+        _logged_once = False
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line.startswith("BATTERY "):
+                    continue
+                try:
+                    self.battery_percent = float(line.split(" ", 1)[1])
+                except ValueError:
+                    continue
+                if not _logged_once:
+                    _logged_once = True
+                    print(f"🔋  Muse 2 battery: {self.battery_percent:.0f}%")
+        except Exception:
+            pass
+
     def _set_status(self, status: str, error: str = "") -> None:
         self.status    = status
         self.error_msg = error
@@ -662,16 +706,32 @@ class MuseConnector:
             mode="w", suffix="_muselsl.log", delete=False
         )
 
+        # Monkey-patch Muse.__init__ supaya callback_telemetry selalu
+        # disisipkan sebelum muselsl.stream() membuat instance Muse-nya
+        # secara internal — stream() sendiri tidak punya parameter untuk
+        # meneruskan callback_telemetry (dicek langsung di source muselsl).
+        # Ini memberi battery % lewat koneksi BLE yang SAMA dengan EEG,
+        # bukan koneksi kedua terpisah (yang di banyak adapter ditolak).
         script = (
+            "from muselsl.muse import Muse; "
             "from muselsl import stream; "
+            "_orig_init = Muse.__init__; "
+            "_cb = lambda ts, battery, fg, av, temp: print(f'BATTERY {battery:.1f}', flush=True); "
+            "Muse.__init__ = lambda self, *a, **kw: _orig_init(self, *a, **{**kw, 'callback_telemetry': _cb}); "
             f"stream(address='{mac_address}', ppg_enabled=True, "
             "acc_enabled=True, gyro_enabled=True)"
         )
         self._stream_proc = subprocess.Popen(
             [sys.executable, "-c", script],
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=self._err_file,
+            text=True,
+            bufsize=1,
         )
+        self._stream_stdout_thread = threading.Thread(
+            target=self._stream_stdout_reader_loop, daemon=True
+        )
+        self._stream_stdout_thread.start()
 
         # Poll until the EEG LSL stream appears (up to 25 s)
         print("⏳  Waiting for Muse 2 LSL streams...")
@@ -718,6 +778,10 @@ class MuseConnector:
         self._connected_at = time.time()
         self._set_status("connected")
         print("✅  Muse 2 connected via muselsl!")
+
+        # Battery telemetry sudah aktif sejak _stream_proc dimulai (lihat
+        # monkey-patch callback_telemetry di atas) — tidak perlu langkah
+        # tambahan di sini.
 
         # IMU (ACC/GYRO) dibaca di thread TERPISAH dari _loop utama supaya
         # cursor control terasa responsif — _loop EEG sengaja lambat (~150ms,
@@ -1637,11 +1701,17 @@ class MuseConnector:
                                       # DIBUANG — terlalu rapuh terhadap
                                       # osilasi natural pada tilt cepat, lihat
                                       # komentar panjang di _update_tilt_command.
-    _TILT_CMD_THRESHOLD    = 0.11    # ambang deviasi (proyeksi ke calib vec)
-                                      # untuk dianggap "tilt" — dinaikkan dari 0.06
-                                      # (terbukti false-positive saat idle di
-                                      # testing nyata). Jauh di atas _TILT_DEADZONE
-                                      # cursor (0.025) karena ini gesture disengaja.
+    _TILT_CMD_THRESHOLD    = 0.19    # ambang deviasi (proyeksi ke calib vec)
+                                      # untuk dianggap "tilt" — dinaikkan dari 0.06,
+                                      # lalu 0.11, lalu 0.15 (testing nyata BERULANG:
+                                      # tetap sedikit tilt saja sudah trigger tiap
+                                      # kali dinaikkan sedikit, jadi kali ini dinaikkan
+                                      # lebih signifikan). Dijaga tetap di bawah
+                                      # _TILT_MAX (0.22, "tilt penuh" cursor control)
+                                      # supaya command masih bisa dicapai dengan
+                                      # gesture cepat wajar, bukan tilt ekstrem. Jauh
+                                      # di atas _TILT_DEADZONE cursor (0.025) karena
+                                      # ini gesture disengaja.
     _TILT_RELEASE_RATIO    = 0.6     # release valid kalau |tilt_val| turun ke
                                       # bawah RATIO × puncak yang dicapai
                                       # selama "risen" (bukan cuma ambang

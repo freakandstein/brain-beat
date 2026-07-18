@@ -46,6 +46,20 @@ body {
     justify-content: space-between;
     margin-top: 4px;
 }
+.bci-corner {
+    position: relative;
+}
+.battery-badge {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: #9ca3af;
+    white-space: nowrap;
+    transition: color 0.4s;
+}
 .header-sub {
     display: flex;
     align-items: center;
@@ -471,9 +485,12 @@ body {
         <span class="live-dot" id="live-dot"></span>
         FluidSynth &nbsp;·&nbsp; Generative &nbsp;·&nbsp; Realtime
       </div>
-      <div class="bci-wrap">
-        <button id="bci-btn" onclick="bciBtnClick()">&#x1F50D; Connect</button>
-        <div class="bci-device-list" id="bci-device-list"></div>
+      <div class="bci-corner">
+        <div class="battery-badge" id="battery-badge">&#x1F50B; <span id="battery-val">—</span></div>
+        <div class="bci-wrap">
+          <button id="bci-btn" onclick="bciBtnClick()">&#x1F50D; Connect</button>
+          <div class="bci-device-list" id="bci-device-list"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -744,6 +761,16 @@ socket.on('state_update', (d) => {
 
   document.getElementById('spectrum-cursor').style.left = (sp * 100) + '%';
   document.getElementById('hr-val').textContent = d.heart_rate ? d.heart_rate + ' bpm' : '—';
+
+  if (typeof d.battery_percent === 'number') {
+    const bp = d.battery_percent;
+    document.getElementById('battery-val').textContent = Math.round(bp) + '%';
+    const battColor = bp <= 15 ? '#f87171' : bp <= 30 ? '#facc15' : '#4ade80';
+    document.getElementById('battery-badge').style.color = battColor;
+  } else {
+    document.getElementById('battery-val').textContent = '—';
+    document.getElementById('battery-badge').style.color = '#9ca3af';
+  }
 
   function toDb(v) { return 10 * Math.log10(Math.max(v, 1e-10)); }
   function fmtHz(hz) { return (hz != null) ? hz.toFixed(1) + ' Hz' : '—'; }
