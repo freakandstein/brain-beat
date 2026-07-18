@@ -200,6 +200,7 @@ class MusicEngine:
         self._bpm      = 62.0
         self._tense_level = 0.0
         self._prev_state  = None
+        self._spectrum_pos_smooth = 0.4   # EMA state for get_spectrum_position()
         # Vote buffer 20 tick (~5 detik): butuh 70% supermajority untuk switch state
         # Supaya tidak flip-flop saat sinyal di borderline
         self._state_votes = deque(maxlen=20)
@@ -286,12 +287,21 @@ class MusicEngine:
           arousal jauh di bawah threshold → mendekati 0 (calm)
           arousal di sekitar threshold    → mendekati 0.5 (flow zone)
           arousal jauh di atas threshold  → mendekati 1 (tense)
+
+        Di-smoothing lewat EMA (alpha=0.15) sebelum dikembalikan — raw arousal
+        goyang tiap tick (100ms) sehingga tanpa smoothing di sini, overlay
+        manapun yang baca field ini langsung dari state_update (brain-art,
+        mental-command, brainwave-visual) melihat sinyal kasar meski masing-
+        masing overlay smoothing sendiri di client. Smoothing di sumbernya
+        supaya semua konsumen dapat sinyal yang sudah halus.
         """
         arousal   = self.eeg.arousal()
         threshold = self._adaptive_threshold
         # Normalisasi: delta ±0.15 = full swing dari center
         delta = (arousal - threshold) / 0.15
-        return round(float(max(0.0, min(1.0, (delta + 1.0) / 2.0))), 3)
+        raw = float(max(0.0, min(1.0, (delta + 1.0) / 2.0)))
+        self._spectrum_pos_smooth += (raw - self._spectrum_pos_smooth) * 0.15
+        return round(self._spectrum_pos_smooth, 3)
 
     def start(self):
         if self._running:

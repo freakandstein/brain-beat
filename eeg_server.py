@@ -85,6 +85,11 @@ def overlay_brainwave_visual():
     return render_template("overlay_brainwave_visual.html")
 
 
+@app.route("/overlay/brain-art")
+def overlay_brain_art():
+    return render_template("overlay_brain_art.html")
+
+
 # ── socket events ─────────────────────────────────────────────────────────────
 
 @socketio.on("connect")
@@ -219,6 +224,42 @@ def on_muse_scan():
 
 # ── background updater ────────────────────────────────────────────────────────
 
+# Histeresis untuk field "state" (calm/tense) yang di-broadcast ke SEMUA
+# overlay lewat state_update — eeg.mental_state() sendiri murni threshold
+# keras tanpa "memory" (lihat EEGState.mental_state di eeg_engine.py), jadi
+# kalau EEG mentah goyang persis di sekitar ambang, label bisa lompat
+# calm<->tense tiap tick (100ms), terlihat "patah" di overlay manapun yang
+# menampilkannya (brain-art, mental-command, brainwave-visual sekaligus,
+# karena ketiganya baca field yang sama). State kandidat baru harus konsisten
+# selama _STATE_HYSTERESIS_TICKS tick berturut-turut sebelum benar-benar
+# di-switch; state saat ini dipertahankan sampai itu terpenuhi.
+_STATE_HYSTERESIS_TICKS = 5   # ~500ms @ 100ms/tick — cukup meredam jitter
+                               # di sekitar ambang tanpa membuat transisi
+                               # terasa lambat/lag.
+_stable_state = "calm"
+_pending_state = None
+_pending_state_count = 0
+
+
+def _debounced_mental_state(eeg) -> str:
+    global _stable_state, _pending_state, _pending_state_count
+    candidate = eeg.mental_state()
+    if candidate == _stable_state:
+        _pending_state = None
+        _pending_state_count = 0
+        return _stable_state
+    if candidate == _pending_state:
+        _pending_state_count += 1
+    else:
+        _pending_state = candidate
+        _pending_state_count = 1
+    if _pending_state_count >= _STATE_HYSTERESIS_TICKS:
+        _stable_state = candidate
+        _pending_state = None
+        _pending_state_count = 0
+    return _stable_state
+
+
 def _background_updater():
     """Push engine state ke semua browser setiap 100ms."""
     while True:
@@ -226,7 +267,7 @@ def _background_updater():
             if engine:
                 with engine._lock:
                     eeg   = engine.eeg
-                    state = eeg.mental_state()
+                    state = _debounced_mental_state(eeg)
                     payload = {
                         "state": state,
                         "bpm":   round(engine._bpm, 1),
@@ -251,6 +292,7 @@ def _background_updater():
                         "theta_hz": muse.peak_hz["theta"] if muse else None,
                         "muse":  muse.status if muse else "unavailable",
                         "heart_rate": muse.heart_rate if muse else None,
+                        "battery_percent": muse.battery_percent if muse else None,
                         "channel_quality": muse.channel_quality if muse else None,
                         "cursor_control": muse.cursor_control_enabled if muse else False,
                         "cursor_baseline_ready": muse._cursor_baseline_ready if muse else False,
