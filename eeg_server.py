@@ -8,6 +8,7 @@ Penggunaan:
     Buka: http://localhost:8765
 """
 
+import argparse
 import sys
 import os
 import signal
@@ -24,6 +25,17 @@ from mouse_connector import MouseConnector
 obs_connector = OBSConnector(password="OmU3IAuGtlNcUPUY")
 keyboard_connector = KeyboardConnector()
 mouse_connector = MouseConnector()
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description="EEG Server — Flask + SocketIO bridge")
+    parser.add_argument(
+        "--recalibrate-tilt", action="store_true",
+        help="Hapus cache kalibrasi tilt_left/tilt_right tersimpan sebelum start, "
+             "supaya kalibrasi penuh 3x diminta lagi saat connect berikutnya "
+             "(dipakai kalau posisi headset berubah signifikan).",
+    )
+    return parser.parse_args()
 
 
 def _kill_existing():
@@ -313,7 +325,16 @@ def _background_updater():
 def main():
     global engine, muse
 
+    args = _parse_args()
     _kill_existing()
+
+    if args.recalibrate_tilt and BRAINFLOW_AVAILABLE and MuseConnector:
+        cache_path = MuseConnector._TILT_CALIB_CACHE_PATH
+        try:
+            os.remove(cache_path)
+            print("🔄  Cache kalibrasi tilt dihapus — kalibrasi penuh 3x akan diminta lagi saat connect.")
+        except FileNotFoundError:
+            print("ℹ️   Tidak ada cache kalibrasi tilt tersimpan — kalibrasi akan berjalan normal.")
 
     print("🥁  Brainwave Monitor — Web UI")
     obs_connector.connect()

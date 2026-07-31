@@ -490,14 +490,15 @@
 
       // bright core — a steady, clearly visible ember at rest that swells
       // into a surging star under tension. Floor raised so it never shrinks
-      // to a bare white dot, and the white hot-spot is pushed to a thin
-      // inner sliver (stop 0.12) so the surrounding hue color reads clearly
-      // instead of the core looking like "just white".
+      // to a bare white dot. Solid zone widened (stops pushed out to
+      // 0.65/0.85) so the core reads as a filled disc instead of a thin
+      // bright ring fading immediately into the halo.
       const coreR = (20 + eeg.theta * 16 + arousal * 24) * pulse;
       const coreGrad = coreCtx.createRadialGradient(c.x, c.y, 0, c.x, c.y, coreR);
       coreGrad.addColorStop(0,    'rgba(255,255,255,0.95)');
-      coreGrad.addColorStop(0.12, `rgba(${hc.r|0},${hc.g|0},${hc.b|0},0.9)`);
-      coreGrad.addColorStop(0.55, `rgba(${hc.r|0},${hc.g|0},${hc.b|0},0.5)`);
+      coreGrad.addColorStop(0.2,  `rgba(${hc.r|0},${hc.g|0},${hc.b|0},0.95)`);
+      coreGrad.addColorStop(0.65, `rgba(${hc.r|0},${hc.g|0},${hc.b|0},0.85)`);
+      coreGrad.addColorStop(0.85, `rgba(${hc.r|0},${hc.g|0},${hc.b|0},0.5)`);
       coreGrad.addColorStop(1,    `rgba(${hc.r|0},${hc.g|0},${hc.b|0},0)`);
       coreCtx.fillStyle = coreGrad;
       coreCtx.beginPath();
