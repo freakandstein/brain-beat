@@ -11,6 +11,7 @@ Digunakan oleh music_server.py (interface tidak berubah).
 """
 
 import csv
+import json
 import subprocess
 import sys
 import threading
@@ -191,6 +192,14 @@ class MuseConnector:
         conn.connect("45A06A8D-FC1E-6656-6CC2-BA3EF830CF41")
         conn.disconnect()
     """
+
+    # File cache kalibrasi tilt — posisi headset user konsisten antar sesi,
+    # jadi hasil _run_tilt_calibration sesi sebelumnya dipakai lagi sebagai
+    # starting point (skip nunggu 3-sample) alih-alih re-kalibrasi dari nol
+    # tiap connect. Lihat _load_tilt_calibration/_save_tilt_calibration.
+    _TILT_CALIB_CACHE_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "tilt_calibration.json"
+    )
 
     def __init__(self, engine, on_status: Optional[Callable] = None):
         if not BRAINFLOW_AVAILABLE:
@@ -819,9 +828,32 @@ class MuseConnector:
             # sesaat lagi) belum tentu sudah dapat data segar dari inlet
             # yang baru. Reset eksplisit di sini menutup celah itu.
             self._acc_sample_count = 0
-            self.tilt_calib_phase = "neutral"
+
+            # Cache dari sesi sebelumnya — kalau ada, pakai langsung supaya
+            # tilt_left/tilt_right BISA DIPAKAI SEGERA tanpa nunggu 3-sample
+            # kalibrasi (posisi headset user biasanya konsisten antar sesi).
+            # Kalibrasi sungguhan tetap jalan di background (thread yang
+            # sama, target tidak berubah) untuk REFRESH nilai ini secara
+            # diam-diam — begitu selesai, _run_tilt_calibration menimpa
+            # _tilt_calib_vec/_tilt_neutral/_tilt_gyro_axis dengan hasil
+            # segar dan menulis ulang cache-nya sendiri. User tidak pernah
+            # diblokir menunggu; akurasi membaik sendiri di latar belakang.
+            cached = self._load_tilt_calibration()
+            _from_cache = cached is not None
+            if cached is not None:
+                self._tilt_calib_vec  = cached["tilt_calib_vec"]
+                self._tilt_neutral    = cached["tilt_neutral"]
+                self._tilt_gyro_axis  = cached["tilt_gyro_axis"]
+                self._tilt_calib_ready = True
+                self.tilt_calib_phase  = "ready"
+                print("🎯  Kalibrasi tilt dimuat dari cache — tilt_left/tilt_right siap dipakai segera "
+                      f"(vec={tuple(round(v,3) for v in cached['tilt_calib_vec'])}); "
+                      "re-kalibrasi berjalan di background untuk refresh.")
+            else:
+                self.tilt_calib_phase = "neutral"
+
             self._tilt_calib_thread = threading.Thread(
-                target=self._run_tilt_calibration, args=(self._tilt_calib_gen,), daemon=True
+                target=self._run_tilt_calibration, args=(self._tilt_calib_gen, _from_cache), daemon=True
             )
             self._tilt_calib_thread.start()
         else:
@@ -912,7 +944,9 @@ class MuseConnector:
         _csv_path  = f"eeg_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         _csv_file  = open(_csv_path, 'w', newline='')
         _csv_w     = csv.writer(_csv_file)
-        _csv_w.writerow(['time', 'elapsed_s', 'alpha', 'beta', 'theta', 'tbr', 'state', 'hr',
+        _csv_w.writerow(['time', 'elapsed_s', 'alpha', 'beta', 'theta', 'tbr',
+                         'frontal_alpha', 'frontal_theta', 'state', 'hr',
+                         'q_tp9', 'q_af7', 'q_af8', 'q_tp10',
                          'eog_extreme', 'eog_zcross', 'frontal_emg', 'blink_candidates',
                          'wink_af7', 'wink_af8', 'wink_ratio',
                          'jaw_p2p_tp9', 'jaw_p2p_tp10', 'jaw_streak',
@@ -1009,7 +1043,7 @@ class MuseConnector:
                 # dikecualikan karena noise broadband membuat semua band tampak tinggi
                 _CH_NAMES = ["TP9", "AF7", "AF8", "TP10"]
                 alpha_list, beta_list, theta_list = [], [], []
-                frontal_beta_list, frontal_theta_list = [], []  # AF7=1, AF8=2 only
+                frontal_alpha_list, frontal_beta_list, frontal_theta_list = [], [], []  # AF7=1, AF8=2 only
 
                 # ── Pass 1: deteksi frontal EMG SEBELUM proses temporal ────────
                 # Scan semua channel tanpa break — perlu nilai kedua channel untuk
@@ -1330,9 +1364,15 @@ class MuseConnector:
                     return float(np.sum(p[1][mask] * a) / s)
 
                 alpha_hz_list, beta_hz_list, theta_hz_list = [], [], []
+                # Threshold dinaikkan dari 0.25 → 0.65: kualitas marjinal (std rendah,
+                # kontak elektroda kurang stabil) masih lolos di 0.25 dan mendistorsi
+                # band power (mis. frontal_alpha turun ~40% saat q_af7/af8 dip ke 0.4-0.6
+                # meski _frontal_emg tidak terdeteksi) — lihat sesi 20260719_140743.
+                # Tidak mempengaruhi command detector (eyebrow/wink/jaw pakai gate
+                # ch_quality terpisah di pass-1, baris ~1024 & ~1062).
                 for ch in range(4):
-                    if ch_quality[ch] < 0.25:
-                        continue  # skip channel poor/disconnected
+                    if ch_quality[ch] < 0.65:
+                        continue  # skip channel poor/marginal/disconnected
                     ch_data = eeg_win[ch].copy()
                     DataFilter.detrend(ch_data, DetrendOperations.CONSTANT.value)
 
@@ -1386,6 +1426,7 @@ class MuseConnector:
                         theta_hz_list.append(_centroid(psd, 4.0,  8.0))
                         if not _frontal_emg:
                             # Beta frontal valid kalau EMG tidak terdeteksi
+                            frontal_alpha_list.append(a_pow)
                             frontal_beta_list.append(b_pow)
                             frontal_theta_list.append(t_pow)
                             beta_list.append(b_pow)
@@ -1450,10 +1491,10 @@ class MuseConnector:
                 ema_tbr_raw = ema_tbr_raw * (1 - EMA) + tbr_raw * EMA
                 self.tbr = round(ema_tbr, 3)
 
-                # Frontal alpha/theta EMA — dari AF7+AF8 saja, untuk flow_score
-                if alpha_list:  # alpha_list berisi AF7+AF8 (pass 2, ch in (1,2))
-                    fa_raw = self._normalize("frontal_alpha", float(np.mean(alpha_list)))
-                    ft_raw = self._normalize("frontal_theta", float(np.mean(theta_list)))
+                # Frontal alpha/theta EMA — dari AF7+AF8 saja (frontal_*_list), untuk flow_score
+                if frontal_alpha_list:
+                    fa_raw = self._normalize("frontal_alpha", float(np.mean(frontal_alpha_list)))
+                    ft_raw = self._normalize("frontal_theta", float(np.mean(frontal_theta_list)))
                     ema_fa = ema_fa * (1 - EMA) + fa_raw * EMA
                     ema_ft = ema_ft * (1 - EMA) + ft_raw * EMA
                 self.frontal_alpha = round(ema_fa, 3)
@@ -1463,11 +1504,11 @@ class MuseConnector:
                 # Menutup mata & relaks memicu Berger effect: power alpha
                 # frontal naik tajam (sering 1.5-3x baseline) & bertahan lama —
                 # beda dari blink/clench yang transient. Pakai RAW alpha power
-                # (uV^2, dari alpha_list = AF7+AF8) dibanding median 8 detik
+                # (uV^2, dari frontal_alpha_list = AF7+AF8 murni) dibanding median 8 detik
                 # terakhir (baseline "mata terbuka") — lebih sensitif & stabil
                 # daripada nilai frontal_alpha yang sudah di-normalize+EMA berat.
-                if alpha_list:
-                    _fa_pow_now = float(np.mean(alpha_list))
+                if frontal_alpha_list:
+                    _fa_pow_now = float(np.mean(frontal_alpha_list))
 
                     # Hitung ratio dulu pakai baseline LAMA (sebelum diupdate),
                     # baru putuskan apakah sample ini layak masuk baseline.
@@ -1571,8 +1612,11 @@ class MuseConnector:
                         datetime.now().strftime('%H:%M:%S'),
                         round(time.time() - _t0, 1),
                         round(ema_a, 3), round(ema_b, 3), round(ema_t, 3),
-                        round(ema_tbr, 3), state_hint,
+                        round(ema_tbr, 3),
+                        round(ema_fa, 3), round(ema_ft, 3), state_hint,
                         round(self.heart_rate) if self.heart_rate else '',
+                        self.channel_quality["TP9"], self.channel_quality["AF7"],
+                        self.channel_quality["AF8"], self.channel_quality["TP10"],
                         _cmd_diag["eog_extreme"], _cmd_diag["eog_zcross"], _cmd_diag["frontal_emg"], _cmd_diag["blink_candidates"],
                         _cmd_diag["wink_af7"], _cmd_diag["wink_af8"], _cmd_diag["wink_ratio"],
                         _cmd_diag["jaw_p2p_tp9"], _cmd_diag["jaw_p2p_tp10"], _cmd_diag["jaw_streak"],
@@ -1858,7 +1902,41 @@ class MuseConnector:
                                       # untuk variasi natural antar percobaan
                                       # manusia yang sama-sama tilt kanan.
 
-    def _run_tilt_calibration(self, gen: int) -> None:
+    def _load_tilt_calibration(self) -> Optional[dict]:
+        """Baca cache kalibrasi tilt dari sesi sebelumnya, kalau ada.
+        Return None kalau file tidak ada/rusak — pemanggil harus fallback
+        ke kalibrasi normal, bukan crash."""
+        try:
+            with open(self._TILT_CALIB_CACHE_PATH, "r") as f:
+                data = json.load(f)
+            vec = tuple(float(v) for v in data["tilt_calib_vec"])
+            neutral = tuple(float(v) for v in data["tilt_neutral"])
+            axis = data.get("tilt_gyro_axis")
+            if len(vec) != 3 or len(neutral) != 3:
+                return None
+            return {
+                "tilt_calib_vec": vec,
+                "tilt_neutral": neutral,
+                "tilt_gyro_axis": int(axis) if axis is not None else None,
+            }
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return None
+
+    def _save_tilt_calibration(self) -> None:
+        """Simpan hasil kalibrasi tilt sukses ke file supaya sesi berikutnya
+        bisa langsung pakai (skip 3-sample) — lihat _load_tilt_calibration
+        dan pemanggilnya di _launch_and_loop."""
+        try:
+            with open(self._TILT_CALIB_CACHE_PATH, "w") as f:
+                json.dump({
+                    "tilt_calib_vec": list(self._tilt_calib_vec),
+                    "tilt_neutral": list(self._tilt_neutral),
+                    "tilt_gyro_axis": self._tilt_gyro_axis,
+                }, f)
+        except OSError as e:
+            print(f"⚠️  Gagal simpan cache kalibrasi tilt: {e}")
+
+    def _run_tilt_calibration(self, gen: int, from_cache: bool = False) -> None:
         """Kalibrasi 1-sumbu MANDIRI untuk tilt_left/tilt_right — independen
         total dari _run_cursor_calibration (3 tahap, punya cursor control).
         Hanya butuh 1 vektor referensi (tilt kanan); tilt kiri = arah
@@ -1955,7 +2033,12 @@ class MuseConnector:
         # PERNAH dinyalakan sepanjang sesi.
         self._tilt_neutral = tuple(np.mean(np.array(window), axis=0))
 
-        self.tilt_calib_phase = "right"
+        # Fase "right_refresh" (bukan "right") kalau tilt_calib_vec sudah
+        # terisi dari cache — tilt_left/tilt_right SUDAH BISA DIPAKAI, jadi
+        # banner "miringkan kepala sekarang" di UI (index.html, cek phase
+        # persis == "right") tidak boleh muncul lagi seolah user wajib
+        # menunggu. Refresh tetap jalan silent di background.
+        self.tilt_calib_phase = "right_refresh" if from_cache else "right"
         # KALIBRASI MULTI-SAMPLE — DITEMUKAN LEWAT PENGGUNAAN NYATA BERULANG:
         # kalibrasi dari SATU gerakan referensi terlalu sensitif terhadap
         # variasi kecil (kecepatan, sudut, timing overshoot) — hasilnya
@@ -1972,7 +2055,22 @@ class MuseConnector:
         collected_dirs: list = []   # unit vectors dari tiap sample sukses & konsisten
         collected_axes: list = []   # dominant_axis dari tiap sample sukses
         attempt = 0
+        # Refresh dari cache TIDAK BOLEH loop tanpa batas seperti kalibrasi
+        # blocking asli — di kalibrasi asli, user sedang aktif menonton
+        # banner dan sengaja mengulang gerakan sampai berhasil, jadi retry
+        # tanpa batas itu benar. Tapi refresh background ini jalan SAAT USER
+        # SUDAH PAKAI APLIKASI SEPERTI BIASA (tidak sengaja tilt berulang-
+        # ulang) — tanpa batas, ini akan retry SELAMANYA tiap sesi, terus
+        # menerus print warning "sample tidak konsisten" ke console tanpa
+        # progress nyata. Cap longgar (5x _CALIB_SAMPLE_COUNT percobaan)
+        # lalu diam-diam menyerah dan tetap pakai cache lama (lihat
+        # collected_dirs check di bawah, from_cache branch).
+        _max_attempts = self._CALIB_SAMPLE_COUNT * 5 if from_cache else None
         while len(collected_dirs) < self._CALIB_SAMPLE_COUNT:
+            if _max_attempts is not None and attempt >= _max_attempts:
+                print(f"ℹ️  Refresh kalibrasi tilt (background) berhenti setelah {attempt} percobaan "
+                      f"tanpa cukup sample konsisten — tetap pakai cache lama, tidak mengganggu penggunaan.")
+                break
             attempt += 1
             # Progress ke browser (bukan cuma console print) — durasi
             # kalibrasi TIDAK DIBATASI (lihat komentar _MIN_DEV_NORM di
@@ -2072,6 +2170,13 @@ class MuseConnector:
                 # lain) — fallback X axis, sama seperti dev is None.
                 self._tilt_calib_vec = (1.0, 0.0, 0.0)
                 print("⚠️  Kalibrasi tilt: sample-sample saling bertentangan arah — fallback ke axis default")
+        elif from_cache:
+            # Refresh diam-diam dari cache gagal total (user tidak sempat
+            # tilt kanan lagi sesi ini) — JANGAN timpa vektor cache yang
+            # sudah TERBUKTI valid dengan fallback X-axis, itu akan merusak
+            # tilt_left/tilt_right yang sudah aktif dipakai. Tetap pakai
+            # nilai cache apa adanya.
+            print("⚠️  Refresh kalibrasi tilt (background) tidak dapat sample baru — tetap pakai cache lama")
         else:
             # Semua percobaan gagal — fallback X axis, sama seperti
             # fallback _run_cursor_calibration (kasus langka).
@@ -2085,11 +2190,12 @@ class MuseConnector:
             _counts = [collected_axes.count(i) for i in range(3)]
             self._tilt_gyro_axis = int(np.argmax(_counts))
             print(f"  🗳️  Voting axis dari {len(collected_axes)} sample: {collected_axes} → axis={self._tilt_gyro_axis}")
-        else:
+        elif not from_cache:
             # Fallback path (tidak ada sample gyro terkumpul) — guard axis-
             # dominance di _update_tilt_command akan skip diam-diam kalau
             # axis ini None (fallback ke accel-only), tidak
-            # crash.
+            # crash. Kalau from_cache, biarkan _tilt_gyro_axis cache lama
+            # apa adanya (sama alasannya dengan _tilt_calib_vec di atas).
             self._tilt_gyro_axis = None
             self._tilt_gyro_sign = 1.0
 
@@ -2098,6 +2204,11 @@ class MuseConnector:
         self.tilt_calib_progress = ""
         print(f"🎯  Kalibrasi tilt command selesai — vec={tuple(round(v,3) for v in self._tilt_calib_vec)} "
               f"gyro_axis={self._tilt_gyro_axis}")
+        # Hanya cache kalibrasi yang benar-benar terukur dari gerakan user
+        # (bukan fallback X-axis dari kegagalan total) — lihat collected_dirs
+        # check di atas.
+        if collected_dirs:
+            self._save_tilt_calibration()
 
     def _wait_for_stable_window_tilt(self, gen: int) -> Optional[list]:
         """Sama seperti _wait_for_stable_window, tapi gate pakai self.running

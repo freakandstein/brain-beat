@@ -164,7 +164,15 @@ class EEGState:
     frontal_theta: float = 0.5
 
     def arousal(self) -> float:
-        return 0.50 * self.beta - 0.30 * self.alpha - 0.20 * self.tbr
+        # Bobot beta dinaikkan drastis (0.30→0.70), alpha/tbr diturunkan (0.30→0.10,
+        # 0.20→0.05) — data 2 sesi gameplay (HR sampai 148bpm) menunjukkan alpha & tbr
+        # naik BERSAMAAN dengan beta saat arousal fisiologis tinggi (bukan berlawanan
+        # arah seperti asumsi bobot lama), sehingga saling meniadakan dan arousal tidak
+        # pernah menyeberang ke "tense" walau HR sudah jelas memuncak. Beta murni
+        # berkorelasi HR paling tinggi (r≈0.15 vs r≈0.02 formula lama); alpha/tbr
+        # dipertahankan bobot kecil sebagai sinyal sekunder, bukan dihapus total,
+        # untuk jaga-jaga skenario calm/meditasi yang belum tervalidasi dari data ini.
+        return 0.70 * self.beta - 0.10 * self.alpha - 0.05 * self.tbr
 
     def flow_score(self) -> float:
         """
