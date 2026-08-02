@@ -1937,6 +1937,20 @@ class MuseConnector:
             print(f"⚠️  Gagal simpan cache kalibrasi tilt: {e}")
 
     def _run_tilt_calibration(self, gen: int, from_cache: bool = False) -> None:
+        # Simpan arah cache SEBELUM proses ini menimpanya — dipakai sebagai
+        # anchor konsistensi tambahan di bawah (lihat _cache_ref_dir).
+        # DITEMUKAN LEWAT BUG NYATA: tanpa anchor ini, konsistensi hanya
+        # dicek ANTAR SAMPLE BARU (collected_dirs) yang mulai kosong tiap
+        # refresh — 3 sample baru yang konsisten SATU SAMA LAIN tapi
+        # kebetulan searah TERBALIK dari cache lama (mis. user tilt kiri
+        # tapi sistem masih menganggap fase ini "tilt kanan") tetap lolos
+        # dan diam-diam MEMBALIK arti kanan/kiri tanpa user sadar sama
+        # sekali (tidak ada banner saat refresh dari cache).
+        _cache_ref_dir = (
+            np.array(self._tilt_calib_vec) / np.linalg.norm(self._tilt_calib_vec)
+            if from_cache and self._tilt_calib_vec is not None
+            else None
+        )
         """Kalibrasi 1-sumbu MANDIRI untuk tilt_left/tilt_right — independen
         total dari _run_cursor_calibration (3 tahap, punya cursor control).
         Hanya butuh 1 vektor referensi (tilt kanan); tilt kiri = arah
@@ -2133,6 +2147,21 @@ class MuseConnector:
                               f"min={self._CALIB_CONSISTENCY_MIN_DOT}) — "
                               f"percobaan {attempt}, dibuang, ulangi gerakan yang sama.")
                         continue
+
+            # Anchor terhadap cache lama (refresh silent saja, lihat
+            # _cache_ref_dir di atas) — sample yang konsisten satu sama lain
+            # tapi berlawanan arah dari cache SEBELUM refresh ini ditolak,
+            # supaya kanan/kiri tidak bisa terbalik diam-diam tanpa user
+            # sadar. Kalau user memang sengaja reposisi headset drastis,
+            # jalur yang benar adalah --recalibrate-tilt (blocking, ada
+            # banner), bukan refresh diam-diam ini.
+            if _cache_ref_dir is not None:
+                _cache_cos_sim = float(np.dot(cand_dir, _cache_ref_dir))
+                if _cache_cos_sim < self._CALIB_CONSISTENCY_MIN_DOT:
+                    print(f"⚠️  Kalibrasi tilt (refresh): sample berlawanan arah dari cache "
+                          f"(cos_sim={_cache_cos_sim:.2f}, min={self._CALIB_CONSISTENCY_MIN_DOT}) "
+                          f"— percobaan {attempt}, dibuang (kanan/kiri tidak boleh terbalik diam-diam).")
+                    continue
 
             collected_dirs.append(cand_dir)
 
