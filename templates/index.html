@@ -4,23 +4,34 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Brainwave Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-    --bg:     #0f0f1a;
-    --panel:  #1a1a2e;
-    --card:   #16213e;
-    --border: #2a2a4a;
-    --text:   #e2e8f0;
-    --dim:    #64748b;
-    --accent: #1e293b;
+    --bg:       #050f0e;
+    --bg-deep:  #030908;
+    --panel:    #071916;
+    --card:     #081a17;
+    --border:   #0f2e29;
+    --glow-rim: #0d9488;
+    --text:     #d7f5ee;
+    --dim:      #5f8b83;
+    --accent:   #0a201c;
+
+    --font-organic: 'Outfit', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --font-data:    'JetBrains Mono', 'Courier New', Courier, monospace;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-    background: var(--bg);
+    background:
+        radial-gradient(ellipse 90% 60% at 15% 0%, #0d948815, transparent 60%),
+        radial-gradient(ellipse 70% 50% at 100% 100%, #0891b210, transparent 60%),
+        var(--bg);
     color: var(--text);
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-family: var(--font-organic);
     min-height: 100vh;
     display: flex;
     justify-content: center;
@@ -35,10 +46,15 @@ body {
 /* ── Header ─────────────────────────────────────────── */
 .header { padding: 4px 0 8px; }
 .header h1 {
-    font-size: 1.45rem;
-    font-weight: 800;
-    letter-spacing: 0.1em;
+    font-family: var(--font-organic);
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
     color: var(--text);
+    background: linear-gradient(120deg, #5eead4, #2dd4bf 45%, #7dd3fc);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 .header-bottom {
     display: flex;
@@ -54,9 +70,9 @@ body {
     bottom: 100%;
     right: 0;
     margin-bottom: 4px;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     font-size: 0.85rem;
-    color: #9ca3af;
+    color: #6b9c93;
     white-space: nowrap;
     transition: color 0.4s;
 }
@@ -66,13 +82,15 @@ body {
     gap: 6px;
     color: var(--dim);
     font-size: 0.78rem;
+    font-family: var(--font-organic);
+    letter-spacing: 0.01em;
 }
 .live-dot {
     width: 7px; height: 7px;
     border-radius: 50%;
-    background: #4b5563;
+    background: #3f5f58;
     flex-shrink: 0;
-    transition: background 0.4s;
+    transition: background 0.4s, box-shadow 0.4s;
 }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
 
@@ -84,13 +102,13 @@ body {
     gap: 4px;
     flex-shrink: 0;
 }
-#bci-btn {
-    font-family: 'Courier New', monospace;
+#bci-btn, #mute-btn, #cursor-btn {
+    font-family: var(--font-data);
     font-size: 0.68rem;
     font-weight: 700;
-    letter-spacing: 0.06em;
-    padding: 3px 8px;
-    border-radius: 5px;
+    letter-spacing: 0.04em;
+    padding: 3px 9px;
+    border-radius: 20px;
     border: 1px solid var(--border);
     background: var(--accent);
     color: var(--dim);
@@ -98,59 +116,32 @@ body {
     transition: all 0.15s;
     white-space: nowrap;
 }
-#bci-btn:hover { border-color: var(--text); color: var(--text); }
-#bci-btn.scanning { color: #fbbf24; border-color: #fbbf24; animation: blink 0.9s infinite; }
-#bci-btn.connecting { color: #fbbf24; border-color: #fbbf24; cursor: default; }
+#bci-btn:hover, #mute-btn:hover, #cursor-btn:hover { border-color: var(--text); color: var(--text); }
+#bci-btn.scanning { color: #fbbf75; border-color: #fbbf75; box-shadow: 0 0 10px #fbbf7540; animation: blink 0.9s infinite; }
+#bci-btn.connecting { color: #fbbf75; border-color: #fbbf75; cursor: default; }
 #bci-btn.connected {
-    color: #4ade80;
-    border-color: #4ade80;
-    background: #1a2e20;
+    color: #5eead4;
+    border-color: #2dd4bf;
+    background: #0c2b25;
+    box-shadow: 0 0 12px #2dd4bf30;
     cursor: pointer;
 }
-#bci-btn.connected:hover { background: #243a2a; }
-#mute-btn {
-    font-family: 'Courier New', monospace;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    padding: 3px 8px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--accent);
-    color: var(--dim);
-    cursor: pointer;
-    transition: all 0.15s;
-    white-space: nowrap;
-}
-#mute-btn:hover { border-color: var(--text); color: var(--text); }
+#bci-btn.connected:hover { background: #123a32; }
 #mute-btn.muted {
-    color: #f87171;
-    border-color: #f87171;
-    background: #2e1a1a;
+    color: #fb7185;
+    border-color: #fb7185;
+    background: #2e161c;
+    box-shadow: 0 0 10px #fb718530;
 }
-#mute-btn.muted:hover { background: #3a2222; }
-#cursor-btn {
-    font-family: 'Courier New', monospace;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    padding: 3px 8px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--accent);
-    color: var(--dim);
-    cursor: pointer;
-    transition: all 0.15s;
-    white-space: nowrap;
-}
-#cursor-btn:hover { border-color: var(--text); color: var(--text); }
+#mute-btn.muted:hover { background: #3a1c23; }
 #cursor-btn.active {
-    color: #38bdf8;
-    border-color: #38bdf8;
-    background: #16232e;
+    color: #7dd3fc;
+    border-color: #7dd3fc;
+    background: #0d2530;
+    box-shadow: 0 0 10px #7dd3fc30;
     animation: blink 1.4s infinite;
 }
-#cursor-btn.active:hover { background: #1c2e3a; }
+#cursor-btn.active:hover { background: #123244; }
 .footer-controls {
     display: flex;
     justify-content: flex-start;
@@ -159,15 +150,16 @@ body {
 }
 #tilt-calib-banner {
     display: none;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     font-size: 0.72rem;
     font-weight: 700;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
     padding: 5px 10px;
-    border-radius: 5px;
-    border: 1px solid #38bdf8;
-    background: #16232e;
-    color: #38bdf8;
+    border-radius: 8px;
+    border: 1px solid #7dd3fc;
+    background: #0d2530;
+    color: #7dd3fc;
+    box-shadow: 0 0 12px #7dd3fc25;
     margin-top: 8px;
     animation: blink 1.0s infinite;
 }
@@ -180,18 +172,24 @@ body {
 }
 
 /* ── Divider ─────────────────────────────────────────── */
-.divider { height: 1px; background: var(--border); margin: 6px 0; }
+.divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--glow-rim) 50%, transparent);
+    opacity: 0.35;
+    margin: 6px 0;
+}
 
 /* ── Main Card ──────────────────────────────────────── */
 .main-card {
     background:
-        radial-gradient(ellipse 140% 100% at 50% -10%, var(--mood-glow, #4ade8000), transparent 65%),
+        radial-gradient(ellipse 140% 100% at 50% -10%, var(--mood-glow, #2dd4bf00), transparent 65%),
         var(--card);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 14px 16px;
-    margin: 6px 0 10px;
-    transition: background 1.2s ease;
+    border-radius: 14px 14px 22px 14px;
+    box-shadow: inset 0 1px 0 #ffffff05;
+    padding: 17px 19px 15px;
+    margin: 7px 0 11px;
+    transition: background 1.2s ease, box-shadow 1.2s ease;
 }
 
 /* ── State row ──────────────────────────────────────── */
@@ -199,8 +197,8 @@ body {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 8px;
+    gap: 11px;
+    margin-bottom: 9px;
 }
 .state-row-right {
     display: flex;
@@ -210,18 +208,18 @@ body {
     position: relative;
 }
 .hr-badge {
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     font-size: 0.92rem;
     color: #fb7185;
 }
 #state-badge {
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 2.2rem;
-    font-weight: 900;
-    letter-spacing: 0.2em;
-    color: #4ade80;
+    font-family: var(--font-organic);
+    font-size: 2.1rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #5eead4;
     transition: color 0.5s, text-shadow 0.5s;
-    text-shadow: 0 0 24px #4ade8080;
+    text-shadow: 0 0 28px #5eead490, 0 0 60px #5eead430;
     min-width: 6.5ch;
     display: block;
     animation: badgeBreathe 3.2s ease-in-out infinite;
@@ -233,28 +231,30 @@ body {
 #state-desc {
     color: var(--dim);
     font-size: 0.82rem;
+    font-family: var(--font-organic);
 }
 
 /* ── Spectrum slider ─────────────────────────────────── */
-.spectrum-wrap { margin-bottom: 10px; }
+.spectrum-wrap { margin-bottom: 11px; }
 .spectrum-labels {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 5px;
+    margin-bottom: 6px;
 }
 .spectrum-label {
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     font-size: 0.62rem;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
 }
-.spectrum-label.calm  { color: #4ade80; }
-.spectrum-label.flow  { color: #facc15; text-align: center; flex: 1; }
-.spectrum-label.tense { color: #c084fc; }
+.spectrum-label.calm  { color: #5eead4; }
+.spectrum-label.flow  { color: #fbbf75; text-align: center; flex: 1; }
+.spectrum-label.tense { color: #e879f9; }
 .spectrum-track {
     position: relative;
     height: 10px;
     border-radius: 5px;
-    background: linear-gradient(90deg, #4ade80 0%, #facc15 50%, #c084fc 100%);
+    background: linear-gradient(90deg, #2dd4bf 0%, #fbbf75 50%, #e879f9 100%);
+    box-shadow: 0 0 14px -2px #2dd4bf40, inset 0 1px 2px #0008;
     margin-bottom: 6px;
 }
 .spectrum-flow-zone {
@@ -263,8 +263,8 @@ body {
     left: 35%;
     width: 30%;
     height: 16px;
-    border: 1.5px solid #facc1580;
-    border-radius: 4px;
+    border: 1.5px solid #fbbf7580;
+    border-radius: 8px;
     pointer-events: none;
 }
 .spectrum-cursor {
@@ -274,15 +274,15 @@ body {
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 0 8px #fff8, 0 0 0 2px #0008;
+    background: #f0fdfa;
+    box-shadow: 0 0 10px #5eead4c0, 0 0 0 2px #04241fcc;
     transition: left 0.18s ease-out;
     pointer-events: none;
 }
 .spectrum-sublabels {
     display: flex;
     justify-content: space-between;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-data);
     font-size: 0.58rem;
     color: var(--dim);
     padding: 0 2px;
@@ -303,25 +303,25 @@ body {
     white-space: nowrap;
 }
 .mental-inline.flash {
-    background: #4ade8010;
+    background: #2dd4bf12;
 }
 .mental-scene {
-    font-family: 'Courier New', Courier, monospace;
+    font-family: var(--font-data);
     font-size: 0.82rem;
     font-weight: 400;
-    color: #4ade80;
+    color: #5eead4;
     white-space: nowrap;
 }
 .mental-dot {
     width: 8px; height: 8px;
     border-radius: 50%;
-    background: #3f3f46;
+    background: #1c3b35;
     flex-shrink: 0;
     transition: background 0.2s, box-shadow 0.2s;
 }
 .mental-dot.active {
-    background: #4ade80;
-    box-shadow: 0 0 8px #4ade8080;
+    background: #5eead4;
+    box-shadow: 0 0 8px #5eead490;
 }
 
 /* ── EEG + Map row ───────────────────────────────────── */
@@ -333,9 +333,10 @@ body {
 .eeg-channels { flex: 1; min-width: 0; }
 
 .section-label {
-    font-family: 'Courier New', monospace;
-    font-size: 0.6rem;
-    letter-spacing: 0.15em;
+    font-family: var(--font-organic);
+    font-weight: 600;
+    font-size: 0.62rem;
+    letter-spacing: 0.13em;
     color: var(--dim);
     margin-bottom: 6px;
 }
@@ -350,19 +351,19 @@ body {
     margin-bottom: 4px;
 }
 .channel-name {
-    font-family: 'Courier New', Courier, monospace;
+    font-family: var(--font-data);
     font-size: 0.82rem;
     font-weight: 700;
 }
-.channel-name.alpha { color: #60a5fa; }
-.channel-name.beta  { color: #a78bfa; }
-.channel-name.theta { color: #34d399; }
+.channel-name.alpha { color: #7dd3fc; }
+.channel-name.beta  { color: #e879f9; }
+.channel-name.theta { color: #5eead4; }
 .hz-label { font-size: 0.58rem; font-weight: 400; opacity: 0.55; margin-left: 5px; }
 .waveform-canvas {
     width: 100%;
-    height: 48px;
+    height: 47px;
     display: block;
-    border-radius: 6px;
+    border-radius: 4px;
 }
 
 /* ── EEG Channel Map ─────────────────────────────────── */
@@ -374,9 +375,10 @@ body {
     flex-shrink: 0;
 }
 .sq-label {
-    font-family: 'Courier New', monospace;
-    font-size: 0.6rem;
-    letter-spacing: 0.12em;
+    font-family: var(--font-organic);
+    font-weight: 600;
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
     color: var(--dim);
 }
 .head-legend {
@@ -441,7 +443,7 @@ body {
 /* ── Ripple from brain map ───────────────────────────── */
 .eq-ripple {
     fill: none;
-    stroke: #4ade80;
+    stroke: #5eead4;
     stroke-width: 2;
     opacity: 0;
     pointer-events: none;
@@ -461,16 +463,16 @@ body {
     gap: 8px;
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 5px 10px;
+    border-radius: 3px 9px 3px 9px;
+    padding: 5px 11px 5px 9px;
     font-size: 0.72rem;
     cursor: pointer;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s;
     white-space: nowrap;
 }
-.bci-device-item:hover { border-color: #4ade80; }
-.bci-device-name { color: var(--text); font-weight: 600; font-family: 'Courier New', monospace; }
-.bci-device-addr { color: var(--dim); font-family: monospace; font-size: 0.65rem; }
+.bci-device-item:hover { border-color: #2dd4bf; }
+.bci-device-name { color: var(--text); font-weight: 600; font-family: var(--font-data); }
+.bci-device-addr { color: var(--dim); font-family: var(--font-data); font-size: 0.65rem; }
 </style>
 </head>
 
@@ -543,7 +545,7 @@ body {
         <div class="channel">
           <div class="channel-header">
             <span class="channel-name theta">θ &nbsp;theta<span class="hz-label">4–8 Hz</span></span>
-            <span id="theta-val" style="font-family:monospace;font-size:0.75rem;color:#34d399">—</span>
+            <span id="theta-val" style="font-family:monospace;font-size:0.75rem;color:#5eead4">—</span>
           </div>
           <canvas id="theta-wave" class="waveform-canvas"></canvas>
         </div>
@@ -551,7 +553,7 @@ body {
         <div class="channel">
           <div class="channel-header">
             <span class="channel-name alpha">α &nbsp;alpha<span class="hz-label">8–13 Hz</span></span>
-            <span id="alpha-val" style="font-family:monospace;font-size:0.75rem;color:#60a5fa">—</span>
+            <span id="alpha-val" style="font-family:monospace;font-size:0.75rem;color:#7dd3fc">—</span>
           </div>
           <canvas id="alpha-wave" class="waveform-canvas"></canvas>
         </div>
@@ -559,7 +561,7 @@ body {
         <div class="channel">
           <div class="channel-header">
             <span class="channel-name beta">β &nbsp;beta<span class="hz-label">13–25 Hz</span></span>
-            <span id="beta-val" style="font-family:monospace;font-size:0.75rem;color:#a78bfa">—</span>
+            <span id="beta-val" style="font-family:monospace;font-size:0.75rem;color:#e879f9">—</span>
           </div>
           <canvas id="beta-wave" class="waveform-canvas"></canvas>
         </div>
@@ -576,7 +578,7 @@ body {
           </defs>
 
           <!-- Brain illustration (top-down view) -->
-          <g id="brain-illustration" fill="#23233a" stroke="#34344f" stroke-width="1.2" stroke-linejoin="round">
+          <g id="brain-illustration" fill="#0c211d" stroke="#164039" stroke-width="1.2" stroke-linejoin="round">
             <path d="M100,24
                      C123,24 138,33 146,46
                      C156,44 168,52 169,64
@@ -604,31 +606,31 @@ body {
           </g>
 
           <!-- Neural link lines (lit when both sides of a pair are active) -->
-          <path id="link-frontal" class="eq-link" stroke="#4ade80" d="M64,56 Q100,44 136,56"/>
-          <path id="link-temporal" class="eq-link" stroke="#4ade80" d="M21,112 Q100,128 179,112"/>
+          <path id="link-frontal" class="eq-link" stroke="#5eead4" d="M64,56 Q100,44 136,56"/>
+          <path id="link-temporal" class="eq-link" stroke="#5eead4" d="M21,112 Q100,128 179,112"/>
 
           <!-- Ripple ring fired on mental command detection -->
           <circle id="eq-ripple" class="eq-ripple" cx="100" cy="106" r="10"/>
 
-          <circle id="halo-AF7" class="eq-halo" cx="64" cy="56" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
-          <circle id="halo-AF8" class="eq-halo" cx="136" cy="56" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
-          <circle id="halo-TP9" class="eq-halo" cx="21" cy="112" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
-          <circle id="halo-TP10" class="eq-halo" cx="179" cy="112" r="14" fill="#4ade80" filter="url(#eq-blur)"/>
+          <circle id="halo-AF7" class="eq-halo" cx="64" cy="56" r="14" fill="#5eead4" filter="url(#eq-blur)"/>
+          <circle id="halo-AF8" class="eq-halo" cx="136" cy="56" r="14" fill="#5eead4" filter="url(#eq-blur)"/>
+          <circle id="halo-TP9" class="eq-halo" cx="21" cy="112" r="14" fill="#5eead4" filter="url(#eq-blur)"/>
+          <circle id="halo-TP10" class="eq-halo" cx="179" cy="112" r="14" fill="#5eead4" filter="url(#eq-blur)"/>
 
-          <circle id="eq-AF7" class="eq-glow" cx="64" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
-          <text x="64" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF7</text>
-          <circle id="eq-AF8" class="eq-glow" cx="136" cy="56" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
-          <text x="136" y="60" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">AF8</text>
-          <circle id="eq-TP9" class="eq-glow" cx="21" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
-          <text x="21" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP9</text>
-          <circle id="eq-TP10" class="eq-glow" cx="179" cy="112" r="10" fill="#3f3f46" stroke="#1a1a2e" stroke-width="1.5"/>
-          <text x="179" y="116" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="monospace">TP10</text>
+          <circle id="eq-AF7" class="eq-glow" cx="64" cy="56" r="10" fill="#1c3b35" stroke="#04241f" stroke-width="1.5"/>
+          <text x="64" y="60" text-anchor="middle" font-size="7.5" fill="#7fb3a8" font-family="monospace">AF7</text>
+          <circle id="eq-AF8" class="eq-glow" cx="136" cy="56" r="10" fill="#1c3b35" stroke="#04241f" stroke-width="1.5"/>
+          <text x="136" y="60" text-anchor="middle" font-size="7.5" fill="#7fb3a8" font-family="monospace">AF8</text>
+          <circle id="eq-TP9" class="eq-glow" cx="21" cy="112" r="10" fill="#1c3b35" stroke="#04241f" stroke-width="1.5"/>
+          <text x="21" y="116" text-anchor="middle" font-size="7.5" fill="#7fb3a8" font-family="monospace">TP9</text>
+          <circle id="eq-TP10" class="eq-glow" cx="179" cy="112" r="10" fill="#1c3b35" stroke="#04241f" stroke-width="1.5"/>
+          <text x="179" y="116" text-anchor="middle" font-size="7.5" fill="#7fb3a8" font-family="monospace">TP10</text>
         </svg>
         <div class="head-legend">
-          <span><i style="background:#4ade80"></i>Good</span>
-          <span><i style="background:#fbbf24"></i>Weak</span>
-          <span><i style="background:#f87171"></i>Poor</span>
-          <span><i style="background:#3f3f46"></i>Off</span>
+          <span><i style="background:#5eead4"></i>Good</span>
+          <span><i style="background:#fbbf75"></i>Weak</span>
+          <span><i style="background:#fb7185"></i>Poor</span>
+          <span><i style="background:#1c3b35"></i>Off</span>
         </div>
       </div>
 
@@ -652,13 +654,15 @@ const socket = io();
 
 socket.on('connect', () => {
   const dot = document.getElementById('live-dot');
-  dot.style.background = '#4ade80';
+  dot.style.background = '#5eead4';
+  dot.style.boxShadow  = '0 0 8px #5eead490';
   dot.style.animation  = 'blink 1.8s ease-in-out infinite';
 });
 
 socket.on('disconnect', () => {
   const dot = document.getElementById('live-dot');
-  dot.style.background = '#f87171';
+  dot.style.background = '#fb7185';
+  dot.style.boxShadow  = '0 0 8px #fb718590';
   dot.style.animation  = 'none';
 });
 
@@ -745,16 +749,16 @@ socket.on('state_update', (d) => {
 
   let displayState, color, desc;
   if (sp > 0.65) {
-    displayState = 'TENSE'; color = '#c084fc'; desc = 'Tense / Aroused';
+    displayState = 'TENSE'; color = '#e879f9'; desc = 'Tense / Aroused';
   } else if (sp >= 0.35) {
-    displayState = 'FLOW';  color = '#facc15'; desc = 'Flow State';
+    displayState = 'FLOW';  color = '#fbbf75'; desc = 'Flow State';
   } else {
-    displayState = 'CALM';  color = '#4ade80'; desc = 'Calm / Relaxed';
+    displayState = 'CALM';  color = '#5eead4'; desc = 'Calm / Relaxed';
   }
   const badge = document.getElementById('state-badge');
   badge.textContent = displayState;
   badge.style.color = color;
-  badge.style.textShadow = `0 0 24px ${color}80`;
+  badge.style.textShadow = `0 0 28px ${color}90, 0 0 60px ${color}30`;
   badge.style.animationDuration = displayState === 'TENSE' ? '1.4s' : displayState === 'FLOW' ? '2.2s' : '3.2s';
   document.getElementById('state-desc').textContent = desc;
   document.querySelector('.main-card').style.setProperty('--mood-glow', color + '22');
@@ -765,11 +769,11 @@ socket.on('state_update', (d) => {
   if (typeof d.battery_percent === 'number') {
     const bp = d.battery_percent;
     document.getElementById('battery-val').textContent = Math.round(bp) + '%';
-    const battColor = bp <= 15 ? '#f87171' : bp <= 30 ? '#facc15' : '#4ade80';
+    const battColor = bp <= 15 ? '#fb7185' : bp <= 30 ? '#fbbf75' : '#5eead4';
     document.getElementById('battery-badge').style.color = battColor;
   } else {
     document.getElementById('battery-val').textContent = '—';
-    document.getElementById('battery-badge').style.color = '#9ca3af';
+    document.getElementById('battery-badge').style.color = '#6b9c93';
   }
 
   function toDb(v) { return 10 * Math.log10(Math.max(v, 1e-10)); }
@@ -793,14 +797,14 @@ function updateHeadDiagram(quality, connected) {
     const halo = document.getElementById('halo-' + name);
     if (!el) return;
     if (!connected || quality === null) {
-      el.setAttribute('fill', '#3f3f46');
+      el.setAttribute('fill', '#1c3b35');
       el.classList.remove('active');
       if (halo) halo.classList.remove('active');
       active[name] = false;
       return;
     }
     const q = quality[name] ?? 0;
-    const color = q >= 0.7 ? '#4ade80' : q >= 0.35 ? '#fbbf24' : '#f87171';
+    const color = q >= 0.7 ? '#5eead4' : q >= 0.35 ? '#fbbf75' : '#fb7185';
     el.setAttribute('fill', color);
     el.classList.toggle('active', q >= 0.35);
     if (halo) {
@@ -878,7 +882,7 @@ socket.on('muse_scan_result', (d) => {
   btn.className   = '';
   btn.textContent = '🔍 Connect';
   if (d.error) {
-    list.innerHTML = `<div style="font-size:0.68rem;color:#f87171;text-align:right">${d.error}</div>`;
+    list.innerHTML = `<div style="font-size:0.68rem;color:#fb7185;text-align:right">${d.error}</div>`;
     return;
   }
   if (!d.devices || d.devices.length === 0) {
@@ -977,7 +981,7 @@ class Waveform {
   draw() {
     const ctx = this.ctx, W = this._dw, H = this._dh;
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = '#1e293b';
+    ctx.fillStyle = '#0a201c';
     ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 1;
@@ -1011,9 +1015,9 @@ class Waveform {
 
 const waves = {};
 document.addEventListener('DOMContentLoaded', () => {
-  waves.theta = new Waveform('theta-wave', '#34d399');
-  waves.alpha = new Waveform('alpha-wave', '#60a5fa');
-  waves.beta  = new Waveform('beta-wave',  '#a78bfa');
+  waves.theta = new Waveform('theta-wave', '#5eead4');
+  waves.alpha = new Waveform('alpha-wave', '#7dd3fc');
+  waves.beta  = new Waveform('beta-wave',  '#e879f9');
 });
 </script>
 </body>
