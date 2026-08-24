@@ -92,16 +92,6 @@ def overlay_mental_command():
     return render_template("overlay_mental_command.html")
 
 
-@app.route("/overlay/brainwave-visual")
-def overlay_brainwave_visual():
-    return render_template("overlay_brainwave_visual.html")
-
-
-@app.route("/overlay/brain-art")
-def overlay_brain_art():
-    return render_template("overlay_brain_art.html")
-
-
 # ── socket events ─────────────────────────────────────────────────────────────
 
 @socketio.on("connect")
@@ -241,8 +231,7 @@ def on_muse_scan():
 # keras tanpa "memory" (lihat EEGState.mental_state di eeg_engine.py), jadi
 # kalau EEG mentah goyang persis di sekitar ambang, label bisa lompat
 # calm<->tense tiap tick (100ms), terlihat "patah" di overlay manapun yang
-# menampilkannya (brain-art, mental-command, brainwave-visual sekaligus,
-# karena ketiganya baca field yang sama). State kandidat baru harus konsisten
+# menampilkannya. State kandidat baru harus konsisten
 # selama _STATE_HYSTERESIS_TICKS tick berturut-turut sebelum benar-benar
 # di-switch; state saat ini dipertahankan sampai itu terpenuhi.
 _STATE_HYSTERESIS_TICKS = 5   # ~500ms @ 100ms/tick — cukup meredam jitter

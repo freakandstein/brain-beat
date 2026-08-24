@@ -298,10 +298,9 @@ class MusicEngine:
 
         Di-smoothing lewat EMA (alpha=0.15) sebelum dikembalikan — raw arousal
         goyang tiap tick (100ms) sehingga tanpa smoothing di sini, overlay
-        manapun yang baca field ini langsung dari state_update (brain-art,
-        mental-command, brainwave-visual) melihat sinyal kasar meski masing-
-        masing overlay smoothing sendiri di client. Smoothing di sumbernya
-        supaya semua konsumen dapat sinyal yang sudah halus.
+        manapun yang baca field ini langsung dari state_update melihat sinyal
+        kasar meski overlay itu sendiri smoothing lagi di client. Smoothing
+        di sumbernya supaya semua konsumen dapat sinyal yang sudah halus.
         """
         arousal   = self.eeg.arousal()
         threshold = self._adaptive_threshold
