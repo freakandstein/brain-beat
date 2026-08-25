@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Brainwave Monitor — Constellation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@200;400;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: #000000;
+    overflow: hidden;
+    font-family: 'Inter', -apple-system, sans-serif;
+  }
+
+  canvas#field {
+    position: fixed;
+    inset: 0;
+    display: block;
+  }
+
+  /* ── HUD: top-left label stack, Dala-style oversized weightless type ── */
+  #hud {
+    position: fixed;
+    top: 48px;
+    left: 56px;
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  #hud .label {
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.35px;
+    text-transform: uppercase;
+    color: #ffb829;
+    margin-bottom: 10px;
+    opacity: 0.9;
+  }
+
+  #hud .state {
+    font-weight: 400;
+    font-size: 78px;
+    line-height: 1.1;
+    letter-spacing: -3.12px;
+    color: #ffffff;
+    text-transform: uppercase;
+    transition: color 0.6s ease;
+  }
+
+  #hud .state.calm  { color: #ffffff; }
+  #hud .state.flow  { color: #ffb829; }
+  #hud .state.tense { color: #8052ff; }
+
+  #hud .sub {
+    margin-top: 14px;
+    font-weight: 200;
+    font-size: 18px;
+    line-height: 1.5;
+    color: #bdbdbd;
+    display: flex;
+    gap: 28px;
+  }
+
+  #hud .sub .metric b {
+    font-weight: 400;
+    color: #ffffff;
+  }
+
+  /* ── bottom-right ghost readout ── */
+  #readout {
+    position: fixed;
+    bottom: 40px;
+    right: 56px;
+    z-index: 10;
+    text-align: right;
+    font-weight: 200;
+    font-size: 14px;
+    letter-spacing: 0.025em;
+    text-transform: uppercase;
+    color: #9a9a9a;
+    pointer-events: none;
+  }
+
+  #readout .row { margin-bottom: 4px; }
+  #readout .row b { font-weight: 600; color: #ffffff; }
+
+  #warmup {
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    font-weight: 200;
+    font-size: 14px;
+    letter-spacing: 0.025em;
+    text-transform: uppercase;
+    color: #9a9a9a;
+    transition: opacity 0.8s ease;
+    pointer-events: none;
+  }
+  #warmup.hidden { opacity: 0; }
+</style>
+</head>
+<body>
+  <canvas id="field"></canvas>
+
+  <div id="hud">
+    <div class="label">Brainwave Monitor</div>
+    <div class="state" id="state-text">—</div>
+    <div class="sub">
+      <div class="metric">BPM <b id="m-bpm">—</b></div>
+      <div class="metric">AROUSAL <b id="m-arousal">—</b></div>
+      <div class="metric">FLOW <b id="m-flow">—</b></div>
+    </div>
+  </div>
+
+  <div id="readout">
+    <div class="row">ALPHA <b id="r-alpha">—</b></div>
+    <div class="row">BETA <b id="r-beta">—</b></div>
+    <div class="row">THETA <b id="r-theta">—</b></div>
+  </div>
+
+  <div id="warmup">awaiting signal…</div>
+
+  <script src="/static/socket.io.min.js"></script>
+  <script>
+    const canvas = document.getElementById('field');
+    const ctx = canvas.getContext('2d');
+    // Offscreen glow layer: rim particles draw here at full opacity/no
+    // per-shape shadow, then this whole layer is composited back with ONE
+    // ctx.filter blur pass. Per-primitive ctx.shadowBlur across thousands
+    // of triangles/frame is prohibitively slow in Canvas2D — a single
+    // layer-wide blur costs a small, constant amount instead.
+    const glowCanvas = document.createElement('canvas');
+    const glowCtx = glowCanvas.getContext('2d');
+    const DPR = Math.min(window.devicePixelRatio || 1, 2);
+    let W, H;
+
+    function resize() {
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width = W * DPR;
+      canvas.height = H * DPR;
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      glowCanvas.width = W * DPR;
+      glowCanvas.height = H * DPR;
+      glowCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    function hexToRgb(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    }
+
+    // ── brain-shape point cloud — side profile silhouette ────────────────
+    // Polygon traced clockwise from the forehead: frontal lobe → crown →
+    // occipital (back of head) → cerebellum bump → brainstem taper → back
+    // up along the jaw/temporal underside → temporal lobe bulge → forehead.
+    // Coordinates are normalized so the whole head spans roughly
+    // x: -1.05..1.05 (back..front), y: -1.05..0.95 (crown..brainstem tip).
+    const BRAIN_SILHOUETTE = [
+      [ 0.62, -1.00], [ 0.30, -1.05], [-0.05, -1.03], [-0.40, -0.95],
+      [-0.72, -0.78], [-0.92, -0.52], [-1.02, -0.20], [-1.00,  0.08],
+      [-0.88,  0.20], [-0.94,  0.34], [-0.80,  0.44], [-0.86,  0.56],
+      [-0.66,  0.60], [-0.50,  0.50], // cerebellum bump (back-lower)
+      [-0.30,  0.66], [-0.12,  0.82], [ 0.00,  0.95], // brainstem taper
+      [ 0.10,  0.82], [ 0.16,  0.62], [ 0.10,  0.44],
+      [ 0.22,  0.42], [ 0.38,  0.52], [ 0.56,  0.46], // temporal lobe bulge
+      [ 0.66,  0.30], [ 0.62,  0.10], [ 0.72, -0.02],
+      [ 0.86, -0.18], [ 0.92, -0.42], [ 0.86, -0.66],
+      [ 0.76, -0.86],
+    ];
+
+    function pointInPolygon(x, y, poly) {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i][0], yi = poly[i][1];
+        const xj = poly[j][0], yj = poly[j][1];
+        const intersect = ((yi > y) !== (yj > y)) &&
+          (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+
+    function insideBrain(x, y) {
+      if (!pointInPolygon(x, y, BRAIN_SILHOUETTE)) return false;
+      // sulci texture — a few soft wavy exclusion bands so the fill isn't
+      // a flat disc, echoing the folded cortex surface without tracing
+      // literal gyri paths.
+      const fold1 = Math.sin(x * 5.2 + y * 2.0) * 0.5 + Math.sin(y * 6.0 - 1.1) * 0.3;
+      if (fold1 > 1.02 && x > -0.5 && x < 0.75 && y > -0.75 && y < 0.35) return false;
+      return true;
+    }
+
+    // Precompute the silhouette's radius at each angle from its centroid,
+    // so per-particle rim-proximity is a cheap lookup instead of a ray
+    // march — needed since this runs for thousands of particles/frame.
+    const SIL_CENTER = (() => {
+      let sx = 0, sy = 0;
+      for (const [px, py] of BRAIN_SILHOUETTE) { sx += px; sy += py; }
+      return { x: sx / BRAIN_SILHOUETTE.length, y: sy / BRAIN_SILHOUETTE.length };
+    })();
+    const SIL_RADIUS_SAMPLES = 180;
+    const SIL_RADIUS_TABLE = (() => {
+      const table = new Array(SIL_RADIUS_SAMPLES);
+      for (let i = 0; i < SIL_RADIUS_SAMPLES; i++) {
+        const ang = (i / SIL_RADIUS_SAMPLES) * Math.PI * 2 - Math.PI;
+        const dirX = Math.cos(ang), dirY = Math.sin(ang);
+        let r = 0;
+        for (let step = 0; step <= 60; step++) {
+          const rr = (step / 60) * 1.8;
+          if (!pointInPolygon(SIL_CENTER.x + dirX * rr, SIL_CENTER.y + dirY * rr, BRAIN_SILHOUETTE)) break;
+          r = rr;
+        }
+        table[i] = r;
+      }
+      return table;
+    })();
+
+    function edgeProximity(x, y) {
+      // 0 at the outer rim, 1 at the shape center — cheap angular lookup
+      // against the precomputed radius table.
+      const dx = x - SIL_CENTER.x, dy = y - SIL_CENTER.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const ang = Math.atan2(dy, dx);
+      const idx = Math.round(((ang + Math.PI) / (Math.PI * 2)) * SIL_RADIUS_SAMPLES) % SIL_RADIUS_SAMPLES;
+      const maxR = SIL_RADIUS_TABLE[idx] || 0.6;
+      return Math.max(0, Math.min(1, 1 - dist / maxR));
+    }
+
+    const PARTICLE_COUNT = 6800;
+    const AMBIENT_COUNT  = 700;
+
+    let particles = [];
+    let ambient = [];
+
+    // ── zonal palette — position drives color, not randomness ───────────
+    // Rim (outer edge) skews warm amber/white; the core skews cool
+    // violet/teal; a scatter of stray hue keeps it from banding too
+    // cleanly. This mirrors the reference: amber rim-light around a
+    // darker violet-teal interior.
+    function zoneColor(x, y, rim, isFleck, state) {
+      // rim (rim near 1) skews warm/bright — rim-light effect from the
+      // reference. Core (rim near 0) skews cool/sparse. Teal only ever
+      // appears as a rare accent fleck (~5% of particles, true-random per
+      // particle) never a band — a periodic function of x/y would instead
+      // paint stripes, which is what happened before this used isFleck.
+      const n = Math.sin(x * 9.1 + y * 4.7) * 0.5 + 0.5;
+      const fleck = isFleck ? '#15846e' : null;
+      if (state === 'flow') {
+        if (rim > 0.62) return fleck || (n > 0.35 ? '#ffb829' : '#ffffff');
+        if (rim > 0.30) return fleck || (n > 0.5 ? '#ffffff' : '#8052ff');
+        return fleck || '#8052ff';
+      }
+      if (state === 'tense') {
+        if (rim > 0.62) return fleck || (n > 0.4 ? '#8052ff' : '#e05cff');
+        if (rim > 0.30) return fleck || (n > 0.5 ? '#ffffff' : '#8052ff');
+        return fleck || '#e05cff';
+      }
+      // calm
+      if (rim > 0.62) return fleck || (n > 0.3 ? '#ffb829' : '#ffffff');
+      if (rim > 0.30) return fleck || (n > 0.5 ? '#ffffff' : '#8052ff');
+      return fleck || '#8052ff';
+    }
+
+    function buildParticles() {
+      particles = [];
+      let guard = 0;
+      while (particles.length < PARTICLE_COUNT && guard < PARTICLE_COUNT * 60) {
+        guard++;
+        const x = (Math.random() * 2 - 1) * 1.05 + SIL_CENTER.x;
+        const y = (Math.random() * 2 - 1) * 1.10 + SIL_CENTER.y;
+        if (insideBrain(x, y)) {
+          const rim = 1 - edgeProximity(x, y); // 0 at center, 1 at rim
+          particles.push({
+            x, y,
+            rim,
+            fleck: Math.random() < 0.05,
+            size: 0.4 + Math.random() * 0.5,
+            phase: Math.random() * Math.PI * 2,
+            speed: 0.3 + Math.random() * 0.6,
+            // orbit: visible float around the home position — large enough
+            // to actually read as motion (not just twinkle), independent
+            // of the global breathe scale so the whole thing doesn't just
+            // read as "zooming in and out".
+            orbitR: 0.02 + Math.random() * 0.035,
+            orbitSpeed: 0.2 + Math.random() * 0.35,
+            orbitPhase: Math.random() * Math.PI * 2,
+          });
+        }
+      }
+      ambient = [];
+      for (let i = 0; i < AMBIENT_COUNT; i++) {
+        ambient.push({
+          x: (Math.random() * 2 - 1) * 2.6,
+          y: (Math.random() * 2 - 1) * 1.5,
+          size: 0.5 + Math.random() * 1.0,
+          hueShift: Math.random(),
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.15 + Math.random() * 0.35,
+        });
+      }
+    }
+    buildParticles();
+
+    const AMBIENT_PALETTE = ['#8052ff', '#ffb829', '#15846e', '#bdbdbd'];
+
+    function drawTriangle(targetCtx, cx, cy, size, angle, rgb, alpha) {
+      const ctx = targetCtx;
+      const h = size * 1.6;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(0, -h * 0.6);
+      ctx.lineTo(size * 0.55, h * 0.4);
+      ctx.lineTo(-size * 0.55, h * 0.4);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${(alpha * 0.55).toFixed(3)})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha.toFixed(3)})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // ── live state ──────────────────────────────────────────────────────
+    let currentState = null; // null (not 'calm') so the first update — even
+                              // if it happens to be calm — still paints the
+                              // label instead of silently matching a default.
+    let prevState = null;
+    let stateTransition = 1; // 0 = just switched (still prevState's color), 1 = fully currentState
+    let stateData = { state: 'calm', bpm: 60, arousal: 0, flow_score: 0,
+                       alpha: 0.5, beta: 0.2, theta: 0.3, warming_up: true,
+                       spectrum_pos: 0.3 };
+    let breathe = 0.6;
+
+    // ?state=calm|flow|tense on the URL locks the display to that state,
+    // ignoring live updates — handy for previewing a palette in OBS/browser
+    // without needing the Muse connected or in that mental state.
+    const forcedState = new URLSearchParams(location.search).get('state');
+
+    const socket = io();
+    socket.on('state_update', data => {
+      stateData = data;
+      if (forcedState) data = { ...data, state: forcedState, warming_up: false, eeg_active: true };
+      if (data.state && data.state !== currentState) {
+        prevState = currentState;
+        currentState = data.state;
+        stateTransition = 0;
+        const el = document.getElementById('state-text');
+        el.textContent = data.state.toUpperCase();
+        el.className = 'state ' + data.state;
+      }
+      document.getElementById('m-bpm').textContent = data.bpm != null ? data.bpm.toFixed(0) : '—';
+      document.getElementById('m-arousal').textContent = data.arousal != null ? data.arousal.toFixed(3) : '—';
+      document.getElementById('m-flow').textContent = data.flow_score != null ? data.flow_score : '—';
+      document.getElementById('r-alpha').textContent = data.alpha != null ? data.alpha.toFixed(2) : '—';
+      document.getElementById('r-beta').textContent = data.beta != null ? data.beta.toFixed(2) : '—';
+      document.getElementById('r-theta').textContent = data.theta != null ? data.theta.toFixed(2) : '—';
+
+      const warmup = document.getElementById('warmup');
+      if (!data.eeg_active) {
+        warmup.textContent = 'awaiting signal…';
+        warmup.classList.remove('hidden');
+      } else if (data.warming_up) {
+        warmup.textContent = 'calibrating…';
+        warmup.classList.remove('hidden');
+      } else {
+        warmup.classList.add('hidden');
+      }
+    });
+
+    // gesture spark bursts — amber punctuation echoing Dala's Saffron Spark
+    let sparks = [];
+    function addSpark(count = 40) {
+      for (let i = 0; i < count; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const r = Math.random() * 1.3;
+        sparks.push({
+          x: Math.cos(a) * r,
+          y: Math.sin(a) * r * 0.72,
+          vx: Math.cos(a) * (0.3 + Math.random() * 0.5),
+          vy: Math.sin(a) * (0.3 + Math.random() * 0.5),
+          life: 1,
+        });
+      }
+    }
+    ['wink_left', 'wink_right', 'jaw_clench', 'eyebrow_raise', 'double_jaw'].forEach(evt => {
+      socket.on(evt, () => addSpark(30));
+    });
+
+    // ── render loop ─────────────────────────────────────────────────────
+    let lastT = 0;
+    function loop(t) {
+      const dt = Math.min(0.05, (t - lastT) / 1000 || 0);
+      lastT = t;
+
+      ctx.clearRect(0, 0, W, H);
+      glowCtx.clearRect(0, 0, W, H);
+
+      // anchor point is the silhouette's own center, in screen space —
+      // everything else (particles, sparks) is stored relative to the
+      // brain's local coordinate space, offset by -SIL_CENTER at spawn.
+      const cx = W / 2 - SIL_CENTER.x * Math.min(W, H) * 0.62;
+      const cy = H / 2 - SIL_CENTER.y * Math.min(W, H) * 0.62;
+      const scale = Math.min(W, H) * 0.62;
+
+      // subtle breathing scale — kept small so motion reads as particle
+      // float/turntable rotation, not a dominant zoom pulse.
+      breathe += ((0.94 + Math.sin(t * 0.0007) * 0.06) - breathe) * 0.02;
+      const arousalPulse = 1 + (stateData.arousal || 0) * 0.6;
+
+      // crossfade the palette across a state change instead of snapping —
+      // ~1.4s ramp, eased, so calm→tense reads as a color bleed rather
+      // than an instant repaint.
+      if (stateTransition < 1) stateTransition = Math.min(1, stateTransition + dt / 1.4);
+      const transitionEase = stateTransition < 0.5
+        ? 2 * stateTransition * stateTransition
+        : 1 - Math.pow(-2 * stateTransition + 2, 2) / 2;
+
+      // slow whole-constellation turntable — squashes x to fake a Y-axis
+      // spin (no real 3D, just a cosine width scale) so the brain shape
+      // reads as a living object even when EEG data is flat/idle.
+      const rotY = t * 0.00018;
+      const turntable = 0.86 + 0.14 * Math.cos(rotY);
+
+      // ambient background field
+      for (const p of ambient) {
+        p.phase += dt * p.speed;
+        const tw = 0.5 + 0.5 * Math.sin(p.phase);
+        const rgb = hexToRgb(AMBIENT_PALETTE[Math.floor(p.hueShift * AMBIENT_PALETTE.length)]);
+        const x = cx + p.x * scale;
+        const y = cy + p.y * scale;
+        drawTriangle(ctx, x, y, p.size * 2.0, p.phase, rgb, 0.08 + tw * 0.08);
+      }
+
+      // core brain constellation — drawn twice: once crisp on the main
+      // layer, once on the glow layer (same positions) which then gets a
+      // single cheap blur pass composited back additively. This gives the
+      // rim-light bloom from the reference without per-shape shadowBlur.
+      for (const p of particles) {
+        p.phase += dt * p.speed * arousalPulse;
+        p.orbitPhase += dt * p.orbitSpeed * arousalPulse;
+        const tw = 0.5 + 0.5 * Math.sin(p.phase);
+        const orbitX = Math.cos(p.orbitPhase) * p.orbitR;
+        const orbitY = Math.sin(p.orbitPhase * 1.3) * p.orbitR * 0.7;
+        const px = ((p.x - SIL_CENTER.x) + orbitX) * turntable + SIL_CENTER.x;
+        const py = (p.y - SIL_CENTER.y) + orbitY + SIL_CENTER.y;
+        const x = cx + px * scale * breathe;
+        const y = cy + py * scale * breathe;
+        // rim particles read bright/warm (rim-light); core particles sit
+        // dimmer/cooler — matches the reference's lit-from-outside look.
+        const baseAlpha = 0.28 + p.rim * 0.55 + tw * 0.15;
+        const toRgb = hexToRgb(zoneColor(p.x, p.y, p.rim, p.fleck, currentState));
+        let rgb = toRgb;
+        if (prevState && transitionEase < 1) {
+          const fromRgb = hexToRgb(zoneColor(p.x, p.y, p.rim, p.fleck, prevState));
+          rgb = {
+            r: fromRgb.r + (toRgb.r - fromRgb.r) * transitionEase,
+            g: fromRgb.g + (toRgb.g - fromRgb.g) * transitionEase,
+            b: fromRgb.b + (toRgb.b - fromRgb.b) * transitionEase,
+          };
+        }
+        const alpha = Math.min(1, baseAlpha);
+        const size = p.size * (1.6 + p.rim * 1.0);
+        drawTriangle(ctx, x, y, size, p.orbitPhase, rgb, alpha);
+        if (p.rim > 0.45) {
+          drawTriangle(glowCtx, x, y, size * 1.6, p.orbitPhase, rgb, alpha * p.rim);
+        }
+      }
+
+      // single blur pass over the whole glow layer, composited additively
+      ctx.save();
+      ctx.filter = 'blur(3px)';
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.drawImage(glowCanvas, 0, 0, W * DPR, H * DPR, 0, 0, W, H);
+      ctx.restore();
+
+      // gesture sparks
+      sparks = sparks.filter(s => s.life > 0);
+      for (const s of sparks) {
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        s.life -= dt * 0.9;
+        const x = cx + (s.x + SIL_CENTER.x) * scale;
+        const y = cy + (s.y + SIL_CENTER.y) * scale;
+        const rgb = hexToRgb('#ffb829');
+        drawTriangle(ctx, x, y, 4, s.life * 6, rgb, Math.max(0, s.life));
+      }
+
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
