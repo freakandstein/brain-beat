@@ -31,6 +31,7 @@ Penggunaan:
 import json
 import os
 import threading
+import time
 
 try:
     from pynput.keyboard import Controller, Key
@@ -51,7 +52,10 @@ KEYMAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keymap.j
 # Studio hotkey (Cmd+1, sound effect clap), dikonfirmasi lewat testing
 # manual: pynput terkirim tanpa error tapi TIDAK direspon aplikasi,
 # sedangkan tombol fisik & Quartz HID tap sama-sama berhasil.
-_HID_TAP_COMMANDS = {"tilt_right"}
+# jaw_clench → sama, tapi target DuckStation (macro Keyboard/X → Cross):
+# log server menunjukkan pynput terkirim tanpa error ('Keystroke sent'),
+# X fisik lewat macro berhasil, tapi synthetic pynput tidak memicu macro.
+_HID_TAP_COMMANDS = {"tilt_right", "jaw_clench"}
 
 # Nama tombol khusus (non-karakter) yang didukung — selain ini dikirim sebagai
 # karakter literal (mis. "a", "1") ke pynput.
@@ -186,6 +190,14 @@ class KeyboardConnector:
             down = Quartz.CGEventCreateKeyboardEvent(None, keycode, True)
             Quartz.CGEventSetFlags(down, flags)
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+
+            # Jeda antara down & up: down+up yang di-post tanpa jeda bisa
+            # jatuh di antara dua polling loop DuckStation (SDL baca
+            # keyboard per-frame, ~16ms @ 60fps) sehingga tombol "tertekan"
+            # tapi tidak pernah terlihat — gejalanya event terkirim tanpa
+            # error tapi game kadang merespon kadang tidak, tergantung
+            # timing relatif terhadap frame. 50ms > 1 frame di beban berat.
+            time.sleep(0.05)
 
             up = Quartz.CGEventCreateKeyboardEvent(None, keycode, False)
             Quartz.CGEventSetFlags(up, flags)
