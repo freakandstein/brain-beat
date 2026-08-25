@@ -1,4 +1,11 @@
 .DS_Store
 *.csv
-.claude/settings.json
+.claude/
 tilt_calibration.json
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
+
+# Local tooling config — machine-specific, not part of the project.
+.mcp.json
+.ignore

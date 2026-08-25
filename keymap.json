@@ -1,8 +1,8 @@
 {
-  "wink_left": "",
-  "wink_right": "",
-  "eyebrow_raise": "",
-  "jaw_clench": "",
-  "double_jaw": "",
-  "tilt_right": ""
+  "wink_left": "left",
+  "wink_right": "right",
+  "eyebrow_raise": "up",
+  "jaw_clench": "down",
+  "double_jaw": "space",
+  "tilt_right": "esc"
 }

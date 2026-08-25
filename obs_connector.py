@@ -38,7 +38,7 @@ class OBSConnector:
         "tilt_right":    None,
     }
     
-    #     DEFAULT_SCENE_MAP = {
+    # DEFAULT_SCENE_MAP = {
     #     "wink_left":     "Scene 11 (2 Views Without Top)",
     #     "wink_right":    "Scene 11 (2 Views Without Top)",
     #     "jaw_clench":    "Scene 21 (3 Views)",
