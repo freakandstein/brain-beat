@@ -205,9 +205,12 @@ def on_get_keymap():
 @socketio.on("set_keymap")
 def on_set_keymap(data):
     command = (data.get("command") or "").strip()
-    key_combo = (data.get("key") or "").strip()
-    if not command or not key_combo:
+    # "key" absent/None → request malformed, ignore. "" eksplisit → user
+    # sengaja mengosongkan mapping ini (tombol clear di UI), bukan sekadar
+    # belum diisi — KeyboardConnector.press() sudah no-op untuk combo kosong.
+    if "key" not in data or not command:
         return
+    key_combo = (data.get("key") or "").strip()
     keyboard_connector.set_mapping(command, key_combo)
     socketio.emit("keymap", keyboard_connector.get_mapping())
 

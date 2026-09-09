@@ -230,6 +230,19 @@
     animation: blink 0.9s infinite;
   }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+  .keymap-clear {
+    font-family: 'Courier New', monospace;
+    font-size: 0.62rem;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 4px;
+    border: 1px solid #ffffff18;
+    background: transparent;
+    color: #ffffff55;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .keymap-clear:hover { border-color: #ff6b6b88; color: #ff6b6bcc; }
 
   /* ── Combo badge (shown inside HUD for combo commands) ── */
   #combo-badge {
@@ -280,30 +293,37 @@
   <div class="keymap-row" data-command="wink_left">
     <span>Wink Left</span>
     <button class="keymap-key" data-command="wink_left" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="wink_left" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
   </div>
   <div class="keymap-row" data-command="wink_right">
     <span>Wink Right</span>
     <button class="keymap-key" data-command="wink_right" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="wink_right" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
   </div>
   <div class="keymap-row" data-command="eyebrow_raise">
     <span>Eyebrow Raise</span>
     <button class="keymap-key" data-command="eyebrow_raise" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="eyebrow_raise" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
   </div>
   <div class="keymap-row" data-command="jaw_clench">
     <span>Jaw Clench</span>
     <button class="keymap-key" data-command="jaw_clench" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="jaw_clench" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
   </div>
   <div class="keymap-row" data-command="double_jaw">
     <span>Double Jaw</span>
     <button class="keymap-key" data-command="double_jaw" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="double_jaw" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
   </div>
   <div class="keymap-row" data-command="tilt_left">
     <span>Tilt Left</span>
     <button class="keymap-key" data-command="tilt_left" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="tilt_left" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
   </div>
   <div class="keymap-row" data-command="tilt_right">
     <span>Tilt Right</span>
     <button class="keymap-key" data-command="tilt_right" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="tilt_right" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
   </div>
 </div>
 
@@ -892,6 +912,20 @@ function startKeyCapture(btn) {
   btn.textContent = '...';
 }
 
+function clearKeyMapping(clearBtn) {
+  const command = clearBtn.dataset.command;
+  const keyBtn  = document.querySelector(`.keymap-key[data-command="${command}"]`);
+  if (_capturingBtn === keyBtn) _capturingBtn = null;
+  if (keyBtn) {
+    keyBtn.classList.remove('listening');
+    keyBtn.textContent = '—';
+  }
+  // key: '' eksplisit → server menyimpannya sebagai clear permanen, beda
+  // dari field "key" yang absen sama sekali (lihat on_set_keymap di
+  // eeg_server.py, dan guard di KeyboardConnector._load).
+  socket.emit('set_keymap', { command, key: '' });
+}
+
 document.addEventListener('keydown', (e) => {
   if (!_capturingBtn) return;
   e.preventDefault();
@@ -899,6 +933,16 @@ document.addEventListener('keydown', (e) => {
 
   const k = e.key.toLowerCase();
   if (['meta', 'control', 'alt', 'shift'].includes(k)) return;
+
+  // Escape membatalkan capture (kembali ke mapping sebelumnya) daripada
+  // ter-capture sebagai key "esc" — untuk mengosongkan mapping, pakai
+  // tombol ✕ (clearKeyMapping), bukan overload tombol Escape.
+  if (k === 'escape') {
+    _capturingBtn.classList.remove('listening');
+    socket.emit('get_keymap');   // repaint teks tombol dari state server
+    _capturingBtn = null;
+    return;
+  }
 
   const parts = [];
   if (e.metaKey)  parts.push('cmd');
@@ -919,7 +963,9 @@ document.addEventListener('keydown', (e) => {
 socket.on('keymap', (map) => {
   document.querySelectorAll('.keymap-key').forEach((btn) => {
     const command = btn.dataset.command;
-    if (map[command]) btn.textContent = map[command];
+    // map[command] bisa "" (sengaja di-clear) — tampilkan '—' untuk itu,
+    // bukan dibiarkan menampilkan key lama seperti sebelum command ini ada.
+    btn.textContent = map[command] || '—';
   });
 });
 

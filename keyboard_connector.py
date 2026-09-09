@@ -55,7 +55,19 @@ KEYMAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keymap.j
 # jaw_clench → sama, tapi target DuckStation (macro Keyboard/X → Cross):
 # log server menunjukkan pynput terkirim tanpa error ('Keystroke sent'),
 # X fisik lewat macro berhasil, tapi synthetic pynput tidak memicu macro.
-_HID_TAP_COMMANDS = {"tilt_right", "jaw_clench"}
+# double_jaw → target sama (macro DuckStation via Keyboard/X, Macro 2),
+# jadi butuh jalur yang sama walau combo-nya sequence ("x,x,x,x").
+# tilt_left → sama alasannya dengan tilt_right (juga macro DuckStation);
+# sebelumnya luput didaftarkan di sini saat ditambahkan ke keymap.json,
+# sehingga lewat pynput dan jadi kadang-jalan-kadang-tidak sedangkan
+# tilt_right (sudah HID tap dari awal) selalu andal.
+# wink_left/wink_right/eyebrow_raise → sama-sama menuju DuckStation
+# (navigasi menu battle), jadi didaftarkan preventif dari awal supaya
+# tidak mengulang pola "kelupaan didaftarkan" yang terjadi pada tilt_left.
+_HID_TAP_COMMANDS = {
+    "tilt_right", "tilt_left", "jaw_clench", "double_jaw",
+    "wink_left", "wink_right", "eyebrow_raise",
+}
 
 # Nama tombol khusus (non-karakter) yang didukung — selain ini dikirim sebagai
 # karakter literal (mis. "a", "1") ke pynput.
@@ -150,18 +162,30 @@ class KeyboardConnector:
 
     # ── internal ──────────────────────────────────────────────────────────
 
+    # Jeda antar step saat combo adalah sequence ("x,x,x,x") — cukup untuk
+    # DuckStation memproses satu confirm/attack sebelum step berikutnya
+    # masuk, tanpa membuat gesture terasa lambat.
+    _SEQUENCE_STEP_DELAY_S = 0.2
+
     def _do_press(self, combo: str, command: str, use_hid_tap: bool = False) -> None:
+        # "x,x,x,x" → 4 step ditekan berurutan dengan jeda; combo biasa
+        # (mis. "cmd+1") tidak punya koma sehingga tetap 1 step seperti
+        # sebelumnya — split ini tidak mengubah command lain.
+        steps = [s.strip() for s in combo.split(",") if s.strip()]
         try:
-            if use_hid_tap:
-                self._send_via_hid_tap(combo)
-                print(f"⌨️  Keystroke '{combo}' sent via HID tap (trigger: {command})")
-            else:
-                keys = _parse_combo(combo)
-                for k in keys:
-                    self._controller.press(k)
-                for k in reversed(keys):
-                    self._controller.release(k)
-                print(f"⌨️  Keystroke '{combo}' sent (trigger: {command})")
+            for i, step in enumerate(steps):
+                if use_hid_tap:
+                    self._send_via_hid_tap(step)
+                    print(f"⌨️  Keystroke '{step}' sent via HID tap (trigger: {command})")
+                else:
+                    keys = _parse_combo(step)
+                    for k in keys:
+                        self._controller.press(k)
+                    for k in reversed(keys):
+                        self._controller.release(k)
+                    print(f"⌨️  Keystroke '{step}' sent (trigger: {command})")
+                if i < len(steps) - 1:
+                    time.sleep(self._SEQUENCE_STEP_DELAY_S)
         except Exception as e:
             print(f"⚠️  Keystroke send failed for '{command}' → '{combo}': {e}")
 
@@ -209,13 +233,17 @@ class KeyboardConnector:
                 with open(self.keymap_path, "r") as f:
                     data = json.load(f)
                 merged = dict(DEFAULT_KEYMAP)
-                # Cuma timpa default hardcode kalau file punya nilai NON-
-                # KOSONG — string kosong di keymap.json berarti "belum
-                # di-set lewat UI", bukan "sengaja kosongkan command ini".
-                # Tanpa guard ini, entry kosong bawaan file (mis. dari
-                # template awal) diam-diam menimpa DEFAULT_KEYMAP dan
-                # command jadi tidak pernah kirim keystroke apapun.
-                merged.update({k: v for k, v in data.items() if v})
+                # File yang SEMUA-nya kosong (mis. template awal yang belum
+                # pernah disentuh UI) tidak boleh mematikan semua command —
+                # itu masih fallback total ke DEFAULT_KEYMAP. Tapi begitu
+                # ADA minimal satu entry non-kosong (artinya user pernah
+                # menyimpan lewat UI/set_mapping), file itu jadi sumber
+                # kebenaran penuh: entry kosong di dalamnya berarti user
+                # SENGAJA meng-clear command itu (lihat set_mapping /
+                # eeg_server.py on_set_keymap) dan harus tetap kosong,
+                # bukan diam-diam kembali ke default tiap restart.
+                if any(v for v in data.values()):
+                    merged.update(data)
                 return merged
             except Exception:
                 pass
