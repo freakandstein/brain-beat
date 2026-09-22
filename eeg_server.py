@@ -372,18 +372,6 @@ def main():
             obs_connector.switch_scene("eyebrow_raise")
             keyboard_connector.press("eyebrow_raise")
 
-        def _wink_left_cb():
-            print("😉  Wink left detected — triggering overlay")
-            socketio.emit("wink_left", {})
-            obs_connector.switch_scene("wink_left")
-            keyboard_connector.press("wink_left")
-
-        def _wink_right_cb():
-            print("😉  Wink right detected — triggering overlay")
-            socketio.emit("wink_right", {})
-            obs_connector.switch_scene("wink_right")
-            keyboard_connector.press("wink_right")
-
         def _jaw_clench_cb():
             if muse.cursor_control_enabled:
                 # Cursor Control Mode aktif → jaw clench = left-click, BUKAN
@@ -426,19 +414,38 @@ def main():
             obs_connector.switch_scene("tilt_right")
             keyboard_connector.press("tilt_right")
 
+        def _tilt_up_cb():
+            # Sama arsitekturnya dengan _tilt_left_cb/_tilt_right_cb — axis
+            # pitch (mengangguk), bukan roll. Belum ada entry di keymap.json
+            # (lihat keyboard_connector.py) — press() akan no-op diam-diam
+            # sampai dipetakan, sama seperti eyebrow saat ini.
+            if muse.cursor_control_enabled:
+                return
+            print("↕️  Tilt up detected — triggering overlay")
+            socketio.emit("tilt_up", {})
+            obs_connector.switch_scene("tilt_up")
+            keyboard_connector.press("tilt_up")
+
+        def _tilt_down_cb():
+            if muse.cursor_control_enabled:
+                return
+            print("↕️  Tilt down detected — triggering overlay")
+            socketio.emit("tilt_down", {})
+            obs_connector.switch_scene("tilt_down")
+            keyboard_connector.press("tilt_down")
+
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         muse.on_eyebrow_raise = _eyebrow_cb
-        # Wink di-fire langsung dari MuseConnector (tidak lewat composer),
-        # dipecah jadi left/right. Jaw single/double tetap lewat composer
-        # (perlu window untuk membedakan single vs double clench).
-        muse.on_wink_left                = _wink_left_cb
-        muse.on_wink_right               = _wink_right_cb
+        # Jaw single/double lewat composer (perlu window untuk membedakan
+        # single vs double clench).
         muse.composer.on_jaw_clench      = _jaw_clench_cb
         muse.composer.on_double_jaw      = _double_jaw_cb
         # tilt_left/tilt_right diaktifkan kembali setelah redesign kalibrasi
         # multi-sample (3 percobaan dirata-ratakan, lihat _run_tilt_calibration).
         muse.on_tilt_left                = _tilt_left_cb
         muse.on_tilt_right               = _tilt_right_cb
+        muse.on_tilt_up                  = _tilt_up_cb
+        muse.on_tilt_down                = _tilt_down_cb
         muse.on_cursor_velocity          = mouse_connector.set_velocity
         # Catatan: eyes_closed_relax tidak lagi dipakai playground (diganti
         # eyebrow_raise — gesture cepat & deliberate, lebih konsisten dgn

@@ -395,7 +395,7 @@
         });
       }
     }
-    ['wink_left', 'wink_right', 'jaw_clench', 'eyebrow_raise', 'double_jaw'].forEach(evt => {
+    ['jaw_clench', 'eyebrow_raise', 'double_jaw'].forEach(evt => {
       socket.on(evt, () => addSpark(30));
     });
 

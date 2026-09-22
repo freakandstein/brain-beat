@@ -87,9 +87,8 @@ class GestureComposer:
     Layer di atas detector jaw_clench yang mendeteksi double_jaw (2× clench
     dalam satu window) dengan EDGE-TRIGGERED COUNTING.
 
-    Wink di-fire langsung dari detector (lihat MuseConnector.on_wink_left /
-    on_wink_right), tidak
-    lewat composer — composer ini fokus murni pada jaw counting.
+    Command lain (eyebrow, tilt) di-fire langsung dari detector masing-masing,
+    tidak lewat composer — composer ini fokus murni pada jaw counting.
 
     Cara kerja (edge counting):
       Detector mengirim 1 event per RISING EDGE (saat clench mulai), bukan per
@@ -228,21 +227,17 @@ class MuseConnector:
         self._eyebrow_cooldown:     float = 0.0
         self._eyebrow_streak:       int   = 0
         self._eyebrow_miss:         int   = 0    # tick non-bilateral BERUNTUN — toleransi 1 tick noise
-        self._eyebrow_active_until: float = 0.0  # zona blokir wink/jaw saat bilateral aktif
+        self._eyebrow_active_until: float = 0.0  # zona blokir jaw saat bilateral aktif
 
         # ── Mental command playground (3 modalitas campuran) ──────────────
         # Tongue press (EMG 15-40Hz sedang TP9/TP10), Jaw clench (EMG broadband
         # kuat TP9/TP10), dan Eyebrow raise (EMG frontal bilateral AF7/AF8).
         # Tongue dan jaw pakai electrode yang sama tapi dibedakan amplitudo & band.
-        self.on_wink_left: Optional[callable] = None
-        self.on_wink_right: Optional[callable] = None
         self.on_jaw_clench: Optional[callable] = None
         self.on_eyes_closed_relax: Optional[callable] = None
         self.on_double_blink: Optional[callable] = None   # deprecated
         self.on_teeth_tap: Optional[callable] = None      # deprecated
 
-        self._wink_cooldown: float = 0.0
-        self._wink_streak: int = 0
         self._jaw_cooldown: float = 0.0
         self._jaw_strong_streak: int = 0
         self._jaw_released: bool = True   # True jika rahang sudah lepas (siap menerima clench edge baru)
@@ -283,6 +278,42 @@ class MuseConnector:
         self._tilt_diag_last: float = 0.0   # rate-limit print diagnostik [TILT], lihat _update_tilt_command
         self._tilt_still_since: Optional[float] = None   # timestamp mulai diam (gyro rendah), None = sedang bergerak — lihat _maybe_recenter_tilt_neutral
         self._tilt_abs_val_window: list = []   # buffer |tilt_val| beberapa tick terakhir — dasar cek arah gerakan (menjauh/mendekat), lihat _TILT_MOVING_AWAY_WINDOW_N
+
+        # ── Head tilt (pitch) command: tilt_up / tilt_down ──────────────────
+        # Sumbu TERPISAH dari roll (tilt_left/tilt_right) di atas — gerakan
+        # MENGANGGUK (dagu naik/turun), bukan miring. Kalibrasi arah "atas"
+        # direkam sebagai fase TAMBAHAN di _run_tilt_calibration (setelah
+        # fase kanan selesai), di-orthogonalize (Gram-Schmidt) terhadap
+        # _tilt_calib_vec — meniru teknik _run_cursor_calibration untuk
+        # masalah yang sama: manusia nyaris tidak pernah tilt murni ke kanan
+        # tanpa sedikit komponen naik/turun secara anatomis, jadi 2 vektor
+        # mentah nyaris tidak pernah tegak lurus satu sama lain.
+        # _tilt_neutral/_tilt_calib_gen DIPAKAI BERSAMA dgn tilt_left/right
+        # (posisi netral & sesi kalibrasi yang sama) — hanya vektor arah dan
+        # axis gyro dominan yang independen per axis.
+        self.on_tilt_up: Optional[callable] = None
+        self.on_tilt_down: Optional[callable] = None
+        self._tilt_up_calib_vec: Optional[tuple] = None
+        self._tilt_pitch_gyro_axis: Optional[int] = None   # 0=X/1=Y/2=Z, axis gyro dominan saat tilt atas (kalibrasi)
+        self._tilt_ud_calib_ready: bool = False   # terpisah dari _tilt_calib_ready — left/right bisa siap duluan dari cache walau atas/bawah belum
+        # State machine identik pola _tilt_state/_tilt_rise_side/dst di atas,
+        # duplikat (bukan shared) supaya tidak ada risiko ke tilt_left/right
+        # yang sudah terbukti reliable — lihat _update_tilt_updown_command.
+        self._tilt_ud_state: str = "idle"
+        self._tilt_ud_rise_side: str = ""     # "up" | "down" saat _tilt_ud_state=="risen"
+        self._tilt_ud_rise_time: float = 0.0
+        self._tilt_ud_rise_peak: float = 0.0
+        self._tilt_ud_cooldown: float = 0.0
+        self._tilt_ud_refractory_until: float = 0.0
+        self._tilt_ud_rearmed: bool = True
+        self._tilt_ud_last_fire_time: float = 0.0
+        self._tilt_ud_diag_last: float = 0.0
+        self._tilt_ud_abs_val_window: list = []
+        # Recenter _tilt_neutral TIDAK diduplikat — _update_tilt_command
+        # (roll) sudah memanggil _maybe_recenter_tilt_neutral tiap tick saat
+        # idle; _tilt_neutral itu SHARED, jadi 1 panggilan sudah cukup utk
+        # kedua axis. Panggil dari sini juga akan double-apply EMA per tick.
+
         self._relax_cooldown: float = 0.0
         self._relax_streak: int = 0         # tick BERTURUT-TURUT dgn alpha_ratio > threshold (sustained closure)
         self._relax_alpha_hist: list = []   # buffer raw frontal alpha power (uV^2) untuk baseline
@@ -302,7 +333,6 @@ class MuseConnector:
         self._calib_temporal: list = []     # p2p max(TP9,TP10) saat istirahat
         self._calib_done: bool = False
         # threshold aktif (dipakai detector) — diinisialisasi ke nilai hardcoded
-        self._thr_wink:    float = 800.0
         self._thr_eyebrow: float = 300.0
         self._thr_jaw:     float = 520.0
 
@@ -551,8 +581,6 @@ class MuseConnector:
         self._eyebrow_streak        = 0
         self._eyebrow_miss          = 0
         self._eyebrow_active_until  = 0.0
-        self._wink_cooldown         = 0.0
-        self._wink_streak           = 0
         self._connected_at          = 0.0
         self._jaw_cooldown          = 0.0
         self._jaw_strong_streak     = 0
@@ -564,7 +592,6 @@ class MuseConnector:
         self._calib_frontal    = []
         self._calib_temporal   = []
         self._calib_done       = False
-        self._thr_wink         = 800.0
         self._thr_eyebrow      = 300.0
         self._thr_jaw          = 520.0
         # Safety: matikan cursor control total saat disconnect — tidak boleh
@@ -612,6 +639,20 @@ class MuseConnector:
         self._tilt_diag_last   = 0.0
         self._tilt_still_since = None
         self._tilt_abs_val_window = []
+        # Tilt atas/bawah (pitch) — reset total sama seperti tilt kiri/kanan.
+        self._tilt_up_calib_vec    = None
+        self._tilt_pitch_gyro_axis = None
+        self._tilt_ud_calib_ready  = False
+        self._tilt_ud_state        = "idle"
+        self._tilt_ud_rise_side    = ""
+        self._tilt_ud_rise_time    = 0.0
+        self._tilt_ud_rise_peak    = 0.0
+        self._tilt_ud_cooldown     = 0.0
+        self._tilt_ud_refractory_until = 0.0
+        self._tilt_ud_rearmed      = True
+        self._tilt_ud_last_fire_time = 0.0
+        self._tilt_ud_diag_last    = 0.0
+        self._tilt_ud_abs_val_window = []
         self.composer.reset()
         self._loop_tick  = 0
         self.channel_quality = {"TP9": 0.0, "AF7": 0.0, "AF8": 0.0, "TP10": 0.0}
@@ -849,6 +890,16 @@ class MuseConnector:
                 print("🎯  Kalibrasi tilt dimuat dari cache — tilt_left/tilt_right siap dipakai segera "
                       f"(vec={tuple(round(v,3) for v in cached['tilt_calib_vec'])}); "
                       "re-kalibrasi berjalan di background untuk refresh.")
+                # tilt_up/tilt_down TERPISAH — cache lama (sebelum fitur ini
+                # ada) tidak akan punya field-nya, jadi hanya siap segera
+                # kalau memang tersimpan; kalau tidak, tetap harus menjalani
+                # kalibrasi penuh fase "atas" di _run_tilt_calibration
+                # sebelum _tilt_ud_calib_ready jadi True.
+                if cached["tilt_up_calib_vec"] is not None:
+                    self._tilt_up_calib_vec    = cached["tilt_up_calib_vec"]
+                    self._tilt_pitch_gyro_axis = cached["tilt_pitch_gyro_axis"]
+                    self._tilt_ud_calib_ready  = True
+                    print("🎯  Kalibrasi tilt atas/bawah dimuat dari cache — tilt_up/tilt_down siap dipakai segera.")
             else:
                 self.tilt_calib_phase = "neutral"
 
@@ -905,14 +956,17 @@ class MuseConnector:
 
             if self.cursor_control_enabled:
                 self._update_cursor_control()
-                # Mutual exclusion dengan tilt_left/right: paksa balik ke
-                # idle supaya edge "risen" yang mungkin sedang menunggu
+                # Mutual exclusion dengan tilt_left/right/up/down: paksa balik
+                # ke idle supaya edge "risen" yang mungkin sedang menunggu
                 # release tidak tiba-tiba fire begitu user mematikan cursor
                 # mode di tengah gerakan (state basi dari sebelum mode ON).
-                self._tilt_state     = "idle"
-                self._tilt_rise_side = ""
+                self._tilt_state        = "idle"
+                self._tilt_rise_side    = ""
+                self._tilt_ud_state     = "idle"
+                self._tilt_ud_rise_side = ""
             else:
                 self._update_tilt_command()
+                self._update_tilt_updown_command()
 
             elapsed = time.time() - t0
             time.sleep(max(0.0, IMU_DT - elapsed))
@@ -948,7 +1002,6 @@ class MuseConnector:
                          'frontal_alpha', 'frontal_theta', 'state', 'hr',
                          'q_tp9', 'q_af7', 'q_af8', 'q_tp10',
                          'eog_extreme', 'eog_zcross', 'frontal_emg', 'blink_candidates',
-                         'wink_af7', 'wink_af8', 'wink_ratio',
                          'jaw_p2p_tp9', 'jaw_p2p_tp10', 'jaw_streak',
                          'alpha_pow', 'alpha_baseline', 'alpha_ratio', 'relax_streak',
                          'cmd_fired'])
@@ -959,7 +1012,6 @@ class MuseConnector:
         # ditulis ke CSV supaya bisa dianalisa offline dari file log session.
         _cmd_diag = {
             "eog_extreme": "", "eog_zcross": "", "frontal_emg": "", "blink_candidates": "",
-            "wink_af7": "", "wink_af8": "", "wink_ratio": "",
             "jaw_p2p_tp9": "", "jaw_p2p_tp10": "", "jaw_streak": "",
             "alpha_pow": "", "alpha_baseline": "", "alpha_ratio": "", "relax_streak": "",
             "cmd_fired": "",
@@ -1113,7 +1165,7 @@ class MuseConnector:
                 #      tidak macet gara2 satu tick noise di tengah gesture asli.
                 _now = time.time()
                 # Dihitung sekali di sini, sebelum semua detector — supaya kalau
-                # eyebrow fire dan update _last_cmd_time di tick ini, wink/jaw
+                # eyebrow fire dan update _last_cmd_time di tick ini, jaw
                 # di bawah langsung melihat _cmd_idle = False di tick yang sama.
                 _cmd_idle = (_now - self._last_cmd_time) > 1.5
                 _p2p_af7 = _ch_p2p[1]
@@ -1169,11 +1221,9 @@ class MuseConnector:
                         f"cooldown={_cd_left:.1f}s"
                     )
 
-                _after_wink = (_now - self._wink_cooldown) < 4.0
                 _after_jaw  = (_now - self._jaw_cooldown) < 4.0
                 if (self._eyebrow_streak >= 3 and
                         _cmd_idle and
-                        not _after_wink and
                         not _after_jaw and
                         self.on_eyebrow_raise and
                         _now - self._eyebrow_cooldown > 3.0):
@@ -1208,88 +1258,18 @@ class MuseConnector:
                     if len(self._calib_frontal) >= self._CALIBRATION_TICKS:
                         _f_med = float(np.median(self._calib_frontal))
                         _t_med = float(np.median(self._calib_temporal))
-                        # Multiplier: 3× median untuk eyebrow/wink, 4× untuk jaw
+                        # Multiplier: 3× median untuk eyebrow, 4× untuk jaw
                         # (jaw clench jauh lebih kuat dari noise, margin lebih besar)
                         # Clamp ke range aman agar tidak terlalu sensitif atau kebal.
                         self._thr_eyebrow = float(np.clip(_f_med * 3.0,  80.0, 400.0))
-                        self._thr_wink    = float(np.clip(_f_med * 5.0, 300.0, 1000.0))
                         self._thr_jaw     = float(np.clip(_t_med * 4.0, 300.0,  700.0))
                         self._calib_done  = True
                         print(
                             f"✅  EMG calibration done — "
                             f"frontal_baseline={_f_med:.0f}µV temporal_baseline={_t_med:.0f}µV  |  "
                             f"thr_eyebrow={self._thr_eyebrow:.0f}µV "
-                            f"thr_wink={self._thr_wink:.0f}µV "
                             f"thr_jaw={self._thr_jaw:.0f}µV"
                         )
-
-                # ── 1) Wink (EOG/EMG asimetri, AF7 vs AF8) ───────────────────
-                # Kedip satu mata → defleksi UNILATERAL di AF7 atau AF8.
-                # Dibedakan dari eyebrow raise (bilateral) dengan rasio asimetri.
-                _after_eyebrow  = (_now - self._eyebrow_cooldown) < 5.0
-                _during_eyebrow = self._eyebrow_streak >= 1 or _eyebrow_zone
-                # Blokir semua command 5 detik setelah connect — elektrode belum settle
-                _warmup         = (_now - self._connected_at) < 5.0
-                # Jaw clench menarik kulit kepala → AF7 spike artefak mekanik
-                # Blokir wink selama jaw aktif (TP >400µV) atau 2.5s setelah jaw fire
-                _during_jaw     = _full_max > self._thr_jaw * 0.77
-                _after_jaw      = (_now - self._jaw_cooldown) < 2.5
-
-                _wink_af7    = _ch_p2p[1]
-                _wink_af8    = _ch_p2p[2]
-                _wink_side   = max(_wink_af7, _wink_af8)
-                _wink_weak   = min(_wink_af7, _wink_af8)
-                _wink_ratio  = _wink_side / (_wink_weak + 1e-6)
-                _wink_strong = _wink_side > self._thr_wink
-                _wink_asymm  = _wink_ratio > 2.0
-                # Jika channel lemah >400µV → kedua frontal aktif = eyebrow, bukan wink
-                # Channel lemah mendekati 0 = sisi itu benar2 diam (genuine unilateral,
-                # bukan dropout) — batas bawah diturunkan dari 10 ke 1µV. Wink kiri
-                # (AF7 dominan) sering gagal di sini: AF8 (weak side) kadang jatuh ke
-                # 0-9µV (dianggap dropout invalid) atau naik tipis >300 (dianggap
-                # dekat-eyebrow), sehingga jarang mendarat di rentang lama 10-300.
-                _wink_unilateral = 1.0 <= _wink_weak < 400.0
-                _wink_eye    = "left" if _wink_af7 >= _wink_af8 else "right"
-
-                if _wink_strong:
-                    print(f"  [WINK] AF7={_wink_af7:.0f}µV AF8={_wink_af8:.0f}µV "
-                          f"ratio={_wink_ratio:.1f} asymm={_wink_asymm} unilat={_wink_unilateral} "
-                          f"during_eyebrow={_during_eyebrow} after_eyebrow={_after_eyebrow} "
-                          f"during_jaw={_during_jaw} after_jaw={_after_jaw}")
-
-                _wink_now = (not _warmup
-                             and _wink_strong and _wink_asymm and _wink_unilateral
-                             and not _bilateral
-                             and not _during_eyebrow and not _after_eyebrow
-                             and not _during_jaw
-                             and not _after_jaw
-                             and _both_ch_valid)
-                if _wink_now:
-                    self._wink_streak += 1
-                    # Jika sustained >2 tick = elektrode drift/artifact, bukan wink
-                    if self._wink_streak > 2:
-                        self._wink_streak = 0
-                else:
-                    self._wink_streak = 0
-
-                _cmd_diag["wink_af7"]   = round(_wink_af7, 1)
-                _cmd_diag["wink_af8"]   = round(_wink_af8, 1)
-                _cmd_diag["wink_ratio"] = round(_wink_ratio, 2)
-
-                # Cooldown wink: 1.5s, cukup untuk reset antar wink terpisah.
-                if (self._wink_streak == 1 and
-                        _now - self._wink_cooldown > 1.5):
-                    self._wink_cooldown = _now
-                    self._wink_streak   = 0
-                    _cmd_diag["cmd_fired"] = f"wink_{_wink_eye}"
-                    print(f"😉  Wink edge ({_wink_eye}) — full={_wink_af7:.0f}/{_wink_af8:.0f}µV "
-                          f"ratio={_wink_ratio:.1f}")
-                    _wink_cb = self.on_wink_left if _wink_eye == "left" else self.on_wink_right
-                    if _wink_cb:
-                        try:
-                            _wink_cb()
-                        except Exception as e:
-                            print(f"⚠️  on_wink_{_wink_eye} error: {e}")
 
                 # ── 2) Jaw clench ─────────────────────────────────────────────
                 # Masseter EMG kuat di TP9/TP10 (>520µV).
@@ -1328,7 +1308,7 @@ class MuseConnector:
                     # Rising edge: hanya saat sebelumnya benar-benar released
                     if self._jaw_released:
                         self._jaw_released = False
-                        self._jaw_cooldown = _now   # dipakai eyebrow/wink utk blokir artefak jaw
+                        self._jaw_cooldown = _now   # dipakai eyebrow utk blokir artefak jaw
                         print(f"🦷  Clench edge #{self.composer._jaw_count + 1} → composer — full={_full_max:.0f}µV")
                         self.composer.notify_jaw(_now)
                 elif _full_max < _thr_rel:
@@ -1368,7 +1348,7 @@ class MuseConnector:
                 # kontak elektroda kurang stabil) masih lolos di 0.25 dan mendistorsi
                 # band power (mis. frontal_alpha turun ~40% saat q_af7/af8 dip ke 0.4-0.6
                 # meski _frontal_emg tidak terdeteksi) — lihat sesi 20260719_140743.
-                # Tidak mempengaruhi command detector (eyebrow/wink/jaw pakai gate
+                # Tidak mempengaruhi command detector (eyebrow/jaw pakai gate
                 # ch_quality terpisah di pass-1, baris ~1024 & ~1062).
                 for ch in range(4):
                     if ch_quality[ch] < 0.65:
@@ -1618,7 +1598,6 @@ class MuseConnector:
                         self.channel_quality["TP9"], self.channel_quality["AF7"],
                         self.channel_quality["AF8"], self.channel_quality["TP10"],
                         _cmd_diag["eog_extreme"], _cmd_diag["eog_zcross"], _cmd_diag["frontal_emg"], _cmd_diag["blink_candidates"],
-                        _cmd_diag["wink_af7"], _cmd_diag["wink_af8"], _cmd_diag["wink_ratio"],
                         _cmd_diag["jaw_p2p_tp9"], _cmd_diag["jaw_p2p_tp10"], _cmd_diag["jaw_streak"],
                         _cmd_diag["alpha_pow"], _cmd_diag["alpha_baseline"], _cmd_diag["alpha_ratio"], _cmd_diag["relax_streak"],
                         _cmd_diag["cmd_fired"],
@@ -1795,14 +1774,24 @@ class MuseConnector:
                                       # ditahan lebih lama (mis. memang lagi
                                       # menyandarkan kepala), dianggap bukan
                                       # command dan dibuang saat timeout.
-    _TILT_CMD_COOLDOWN_S    = 1.5    # sama dengan wink — cukup untuk memisah
-                                      # tilt berikutnya, selaras dgn global mutex.
-    _TILT_CMD_REFRACTORY_S  = 1.5    # setelah FIRE (bukan setelah dibuang),
+    _TILT_CMD_COOLDOWN_S    = 1.0    # Diturunkan dari 1.5 — user minta tilt
+                                      # berikutnya lebih responsif setelah
+                                      # wink/eyebrow cross-check dilepas dari
+                                      # _fire_tilt_command. Tetap harus SAMA
+                                      # dengan _TILT_CMD_REFRACTORY_S di bawah
+                                      # (dua-duanya diset dari fire time yang
+                                      # sama, jadi harus expire bareng).
+    _TILT_CMD_REFRACTORY_S  = 1.0    # setelah FIRE (bukan setelah dibuang),
                                       # blokir total masuk state "risen" lagi
                                       # sampai durasi ini lewat — mencegah
                                       # rebound kepala kembali ke netral
                                       # ter-baca sebagai rise kedua yang valid
                                       # (trigger dobel dari 1 gerakan fisik).
+                                      # Diturunkan dari 1.5 — kalau rebound
+                                      # ternyata mulai kebaca sebagai tilt
+                                      # balik yang tidak disengaja, naikkan
+                                      # lagi ke arah 1.5 daripada dorong lebih
+                                      # rendah dari 1.0.
     _TILT_GYRO_MIN_DPS      = 5.0    # gyro axis dominan harus melebihi ini
                                       # supaya dihitung sebagai rotasi nyata,
                                       # bukan noise diam (dipakai axis-dominance
@@ -1905,19 +1894,33 @@ class MuseConnector:
     def _load_tilt_calibration(self) -> Optional[dict]:
         """Baca cache kalibrasi tilt dari sesi sebelumnya, kalau ada.
         Return None kalau file tidak ada/rusak — pemanggil harus fallback
-        ke kalibrasi normal, bukan crash."""
+        ke kalibrasi normal, bukan crash.
+
+        tilt_up_calib_vec/tilt_pitch_gyro_axis OPSIONAL (sama seperti
+        tilt_gyro_axis) — cache lama dari sebelum tilt_up/tilt_down ada
+        tidak akan punya field ini, harus tetap bisa dimuat (right/left
+        langsung siap dari cache, up/down jalani kalibrasi penuh sesi ini)."""
         try:
             with open(self._TILT_CALIB_CACHE_PATH, "r") as f:
                 data = json.load(f)
             vec = tuple(float(v) for v in data["tilt_calib_vec"])
             neutral = tuple(float(v) for v in data["tilt_neutral"])
             axis = data.get("tilt_gyro_axis")
+            up_vec_raw = data.get("tilt_up_calib_vec")
+            up_axis = data.get("tilt_pitch_gyro_axis")
             if len(vec) != 3 or len(neutral) != 3:
                 return None
+            up_vec = None
+            if up_vec_raw is not None:
+                up_vec = tuple(float(v) for v in up_vec_raw)
+                if len(up_vec) != 3:
+                    up_vec = None
             return {
                 "tilt_calib_vec": vec,
                 "tilt_neutral": neutral,
                 "tilt_gyro_axis": int(axis) if axis is not None else None,
+                "tilt_up_calib_vec": up_vec,
+                "tilt_pitch_gyro_axis": int(up_axis) if up_axis is not None else None,
             }
         except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
@@ -1925,13 +1928,18 @@ class MuseConnector:
     def _save_tilt_calibration(self) -> None:
         """Simpan hasil kalibrasi tilt sukses ke file supaya sesi berikutnya
         bisa langsung pakai (skip 3-sample) — lihat _load_tilt_calibration
-        dan pemanggilnya di _launch_and_loop."""
+        dan pemanggilnya di _launch_and_loop. Dipanggil 2x per koneksi (abis
+        fase kanan, lalu lagi abis fase atas di _run_tilt_calibration) — tiap
+        panggilan menulis ulang state LENGKAP saat itu, jadi panggilan kedua
+        otomatis menyertakan hasil fase pertama juga."""
         try:
             with open(self._TILT_CALIB_CACHE_PATH, "w") as f:
                 json.dump({
                     "tilt_calib_vec": list(self._tilt_calib_vec),
                     "tilt_neutral": list(self._tilt_neutral),
                     "tilt_gyro_axis": self._tilt_gyro_axis,
+                    "tilt_up_calib_vec": list(self._tilt_up_calib_vec) if self._tilt_up_calib_vec else None,
+                    "tilt_pitch_gyro_axis": self._tilt_pitch_gyro_axis,
                 }, f)
         except OSError as e:
             print(f"⚠️  Gagal simpan cache kalibrasi tilt: {e}")
@@ -2237,6 +2245,128 @@ class MuseConnector:
         # (bukan fallback X-axis dari kegagalan total) — lihat collected_dirs
         # check di atas.
         if collected_dirs:
+            self._save_tilt_calibration()
+
+        # ══════════════════════════════════════════════════════════════════
+        # Fase tambahan: kalibrasi tilt_up/tilt_down (pitch) — SEKUENSIAL
+        # setelah fase kanan di atas selesai (tidak mengubah apa pun di atas
+        # baris ini). Butuh _tilt_calib_vec final karena arah "atas" di-
+        # orthogonalize (Gram-Schmidt) terhadapnya di bawah — teknik yang
+        # sama dengan _run_cursor_calibration untuk masalah yang sama:
+        # manusia nyaris tidak pernah tilt murni ke kanan tanpa sedikit
+        # komponen naik/turun secara anatomis, jadi 2 vektor mentah nyaris
+        # tidak pernah tegak lurus satu sama lain kalau dipakai apa adanya.
+        # _tilt_calib_ready (di atas) SUDAH True di titik ini — tilt_left/
+        # tilt_right sudah bisa dipakai walau fase ini masih berjalan.
+        # ══════════════════════════════════════════════════════════════════
+        _cache_ref_dir_up = (
+            np.array(self._tilt_up_calib_vec) / np.linalg.norm(self._tilt_up_calib_vec)
+            if from_cache and self._tilt_up_calib_vec is not None
+            else None
+        )
+        self.tilt_calib_phase = "up_refresh" if _cache_ref_dir_up is not None else "up"
+        collected_dirs_up: list = []
+        collected_axes_up: list = []
+        attempt_up = 0
+        _max_attempts_up = self._CALIB_SAMPLE_COUNT * 5 if _cache_ref_dir_up is not None else None
+        while len(collected_dirs_up) < self._CALIB_SAMPLE_COUNT:
+            if _max_attempts_up is not None and attempt_up >= _max_attempts_up:
+                print(f"ℹ️  Refresh kalibrasi tilt atas (background) berhenti setelah {attempt_up} percobaan "
+                      f"tanpa cukup sample konsisten — tetap pakai cache lama, tidak mengganggu penggunaan.")
+                break
+            attempt_up += 1
+            self.tilt_calib_progress = f"{len(collected_dirs_up)}/{self._CALIB_SAMPLE_COUNT}"
+            if attempt_up > 1:
+                time.sleep(_READ_DELAY_S)
+                if not self.running or gen != self._tilt_calib_gen:
+                    return
+            samples_acc, samples_gyro = self._record_tilt_motion(gen)
+            if samples_acc is None or not self.running or gen != self._tilt_calib_gen:
+                return
+            arr = np.array(samples_acc) - np.array(self._tilt_neutral)
+            norms = np.linalg.norm(arr, axis=1)
+            peak_idx = int(np.argmax(norms))
+            cand_dev = arr[peak_idx]
+            cand_norm = float(norms[peak_idx])
+
+            if cand_norm < _MIN_DEV_NORM:
+                print(f"⚠️  Kalibrasi tilt atas: deviasi maksimum terlalu kecil (norm={cand_norm:.3f}) "
+                      f"— percobaan {attempt_up}, tidak dihitung, retry...")
+                continue
+
+            cand_dir = cand_dev / cand_norm
+
+            if collected_dirs_up:
+                _ref_dir = np.mean(np.array(collected_dirs_up), axis=0)
+                _ref_norm = np.linalg.norm(_ref_dir)
+                if _ref_norm > 1e-6:
+                    _cos_sim = float(np.dot(cand_dir, _ref_dir / _ref_norm))
+                    if _cos_sim < self._CALIB_CONSISTENCY_MIN_DOT:
+                        print(f"⚠️  Kalibrasi tilt atas: sample TIDAK KONSISTEN dengan "
+                              f"sample sebelumnya (cos_sim={_cos_sim:.2f}, "
+                              f"min={self._CALIB_CONSISTENCY_MIN_DOT}) — "
+                              f"percobaan {attempt_up}, dibuang, ulangi gerakan yang sama.")
+                        continue
+
+            if _cache_ref_dir_up is not None:
+                _cache_cos_sim = float(np.dot(cand_dir, _cache_ref_dir_up))
+                if _cache_cos_sim < self._CALIB_CONSISTENCY_MIN_DOT:
+                    print(f"⚠️  Kalibrasi tilt atas (refresh): sample berlawanan arah dari cache "
+                          f"(cos_sim={_cache_cos_sim:.2f}, min={self._CALIB_CONSISTENCY_MIN_DOT}) "
+                          f"— percobaan {attempt_up}, dibuang (atas/bawah tidak boleh terbalik diam-diam).")
+                    continue
+
+            collected_dirs_up.append(cand_dir)
+
+            if samples_gyro:
+                g_arr = np.array(samples_gyro)
+                gyro_mags = np.linalg.norm(g_arr, axis=1)
+                gyro_peak_idx = int(np.argmax(gyro_mags))
+                _half = self._TILT_GYRO_PEAK_WINDOW_N // 2
+                _lo = max(0, gyro_peak_idx - _half)
+                _hi = min(len(g_arr), gyro_peak_idx + _half + 1)
+                g_near_peak = g_arr[_lo:_hi]
+                rms = np.sqrt(np.mean(g_near_peak ** 2, axis=0))
+                collected_axes_up.append(int(np.argmax(rms)))
+            self.tilt_calib_progress = f"{len(collected_dirs_up)}/{self._CALIB_SAMPLE_COUNT}"
+            print(f"  ✓ Sample atas {len(collected_dirs_up)}/{self._CALIB_SAMPLE_COUNT} "
+                  f"terkumpul (norm={cand_norm:.3f}, axis={collected_axes_up[-1] if collected_axes_up else '?'})")
+
+        if collected_dirs_up:
+            mean_dir_up = np.mean(np.array(collected_dirs_up), axis=0)
+            # Gram-Schmidt: buang komponen mean_dir_up yang sejajar arah
+            # kanan (_tilt_calib_vec), sisakan yang benar-benar ortogonal,
+            # baru re-normalize — mencegah tilt kanan/kiri murni ikut
+            # terbaca sebagai tilt_up/down dan sebaliknya.
+            right_arr = np.array(self._tilt_calib_vec)
+            orthogonal = mean_dir_up - np.dot(mean_dir_up, right_arr) * right_arr
+            orth_norm = np.linalg.norm(orthogonal)
+            if orth_norm > 1e-6:
+                self._tilt_up_calib_vec = tuple(orthogonal / orth_norm)
+            else:
+                # mean_dir_up nyaris sejajar arah kanan (gerakan "atas" user
+                # kemungkinan tidak bersih) — fallback Y axis, kasus langka.
+                self._tilt_up_calib_vec = (0.0, 1.0, 0.0)
+                print("⚠️  Kalibrasi tilt atas: arah nyaris sejajar tilt kanan — fallback ke axis default")
+        elif _cache_ref_dir_up is not None:
+            print("⚠️  Refresh kalibrasi tilt atas (background) tidak dapat sample baru — tetap pakai cache lama")
+        else:
+            self._tilt_up_calib_vec = (0.0, 1.0, 0.0)
+            print("⚠️  Kalibrasi tilt atas gagal total — fallback ke axis default, arah mungkin tidak akurat")
+
+        if collected_axes_up:
+            _counts_up = [collected_axes_up.count(i) for i in range(3)]
+            self._tilt_pitch_gyro_axis = int(np.argmax(_counts_up))
+            print(f"  🗳️  Voting axis atas dari {len(collected_axes_up)} sample: "
+                  f"{collected_axes_up} → axis={self._tilt_pitch_gyro_axis}")
+        elif _cache_ref_dir_up is None:
+            self._tilt_pitch_gyro_axis = None
+
+        self._tilt_ud_calib_ready = True
+        self.tilt_calib_phase = "ud_ready"
+        print(f"🎯  Kalibrasi tilt atas/bawah selesai — vec={tuple(round(v,3) for v in self._tilt_up_calib_vec)} "
+              f"gyro_axis={self._tilt_pitch_gyro_axis}")
+        if collected_dirs_up:
             self._save_tilt_calibration()
 
     def _wait_for_stable_window_tilt(self, gen: int) -> Optional[list]:
@@ -2556,17 +2686,18 @@ class MuseConnector:
         """Guard cross-trigger sebelum fire — sinyal accel/gyro sudah
         orthogonal terhadap EMG (channel & sensor beda total), tapi tilt
         kuat tetap bisa menggoyang elektroda dan memicu artefak EMG palsu
-        di AF7/AF8 — maka tilt tetap dimasukkan ke global mutex & pairwise
-        cooldown yang sama dipakai wink/eyebrow/jaw, bukan cuma cooldown
-        sendiri, supaya command lain tidak ikut kesenggol atau sebaliknya."""
-        _cmd_idle    = (now - self._last_cmd_time) > 1.5
-        _after_wink  = (now - self._wink_cooldown) < 1.5
+        di AF7/AF8 — maka tilt tetap dimasukkan ke cooldown jaw & cooldown
+        sendiri. eyebrow SENGAJA tidak dicek di sini (beda dari versi
+        sebelumnya, waktu wink masih ada juga) — belum dipetakan ke keystroke
+        apapun untuk sesi DuckStation saat ini, jadi ikut nge-block tilt tiap
+        kali detector itu fire internal cuma bikin tilt hilang tanpa alasan
+        yang user bisa lihat. Kalau eyebrow dipetakan lagi nanti, _after_eb
+        (dan _cmd_idle, yang di praktiknya cuma kepengaruh eyebrow — lihat
+        _last_cmd_time di blok eyebrow fire) perlu dikembalikan."""
         _after_jaw   = (now - self._jaw_cooldown) < 2.5
-        _after_eb    = (now - self._eyebrow_cooldown) < 3.0
         _own_cd_ok   = (now - self._tilt_cooldown) > self._TILT_CMD_COOLDOWN_S
 
-        if not (_cmd_idle and not _after_wink and not _after_jaw
-                and not _after_eb and _own_cd_ok):
+        if _after_jaw or not _own_cd_ok:
             return
 
         self._tilt_cooldown = now
@@ -2586,6 +2717,118 @@ class MuseConnector:
         self._tilt_last_fire_time = now   # dasar hitung _TILT_REARM_TIMEOUT_S
         cb = self.on_tilt_left if side == "left" else self.on_tilt_right
         print(f"↩️  Tilt {side} FIRED — val_thr={self._TILT_CMD_THRESHOLD}")
+        if cb:
+            try:
+                cb()
+            except Exception as e:
+                print(f"⚠️  on_tilt_{side} error: {e}")
+
+    # ── Head tilt (pitch): tilt_up / tilt_down ──────────────────────────────
+    # Duplikat SENGAJA dari _update_tilt_command/_fire_tilt_command di atas
+    # (bukan generalize jadi 1 fungsi shared) — logic itu sudah melalui
+    # banyak bugfix nyata (rebound, rearm, axis-dominance dominance, dll),
+    # refactor sekarang berisiko mengganggu tilt_left/right yang sudah
+    # terbukti reliable. State di bawah pakai axis pitch (_tilt_up_calib_vec/
+    # _tilt_pitch_gyro_axis) TAPI tetap berbagi _tilt_neutral dengan roll —
+    # posisi netral kepala itu satu, tidak tergantung axis mana yang dibaca.
+
+    def _update_tilt_updown_command(self) -> None:
+        """Sama arsitekturnya dengan _update_tilt_command, axis pitch bukan
+        roll. TIDAK memanggil _maybe_recenter_tilt_neutral — _tilt_neutral
+        SHARED dengan roll, dan fungsi itu sudah dipanggil dari
+        _update_tilt_command tiap tick saat idle; panggil lagi di sini akan
+        menerapkan EMA recenter 2x dalam 1 tick (lihat catatan di
+        _update_tilt_command soal ini)."""
+        if not self._tilt_ud_calib_ready or self._tilt_up_calib_vec is None:
+            return
+
+        gx, gy, gz = self._latest_gyro
+        gyro_vec = (gx, gy, gz)
+        gyro_mag = (gx ** 2 + gy ** 2 + gz ** 2) ** 0.5
+        if gyro_mag > self._GYRO_GATE_DPS:
+            return
+
+        dev = np.array(self._latest_acc) - np.array(self._tilt_neutral)
+        tilt_val = float(np.dot(dev, np.array(self._tilt_up_calib_vec)))
+        _now = time.time()
+
+        self._tilt_ud_abs_val_window.append(abs(tilt_val))
+        if len(self._tilt_ud_abs_val_window) > self._TILT_MOVING_AWAY_WINDOW_N:
+            self._tilt_ud_abs_val_window.pop(0)
+        _window_min = min(self._tilt_ud_abs_val_window)
+        _tilt_moving_away = abs(tilt_val) > _window_min + self._TILT_MOVING_AWAY_EPS
+
+        if abs(tilt_val) > self._TILT_CMD_THRESHOLD * 0.5:
+            if _now - self._tilt_ud_diag_last > 0.15:
+                self._tilt_ud_diag_last = _now
+                _would_side = "up" if tilt_val > 0 else "down"
+                _pitch_ok = self._is_pitch_dominant(gyro_vec)
+                print(f"  [TILT-UD] val={tilt_val:+.3f} thr={self._TILT_CMD_THRESHOLD:.3f} "
+                      f"side_if_pass={_would_side} gyro=({gx:+.1f},{gy:+.1f},{gz:+.1f}) "
+                      f"gyro_axis_calib={self._tilt_pitch_gyro_axis} pitch_dominant={_pitch_ok} "
+                      f"state={self._tilt_ud_state}")
+
+        if self._tilt_ud_state == "idle":
+            if _now < self._tilt_ud_refractory_until:
+                return
+            if not self._tilt_ud_rearmed:
+                if (abs(tilt_val) < self._TILT_REARM_THRESHOLD
+                        or _now - self._tilt_ud_last_fire_time > self._TILT_REARM_TIMEOUT_S):
+                    self._tilt_ud_rearmed = True
+                else:
+                    return
+            if (abs(tilt_val) > self._TILT_CMD_THRESHOLD
+                    and self._is_pitch_dominant(gyro_vec)
+                    and _tilt_moving_away):
+                self._tilt_ud_state     = "risen"
+                self._tilt_ud_rise_side = "up" if tilt_val > 0 else "down"
+                self._tilt_ud_rise_time = _now
+                self._tilt_ud_rise_peak = abs(tilt_val)
+        elif self._tilt_ud_state == "risen":
+            held_s = _now - self._tilt_ud_rise_time
+            self._tilt_ud_rise_peak = max(self._tilt_ud_rise_peak, abs(tilt_val))
+            _released = abs(tilt_val) < self._tilt_ud_rise_peak * self._TILT_RELEASE_RATIO
+            if _released:
+                if self._TILT_CMD_RELEASE_MIN_S <= held_s <= self._TILT_CMD_RELEASE_MAX_S:
+                    self._fire_tilt_updown_command(self._tilt_ud_rise_side, _now)
+                self._tilt_ud_state     = "idle"
+                self._tilt_ud_rise_side = ""
+            elif held_s > self._TILT_CMD_RELEASE_MAX_S:
+                self._tilt_ud_state     = "idle"
+                self._tilt_ud_rise_side = ""
+
+    def _is_pitch_dominant(self, gyro_vec: tuple) -> bool:
+        """Sama arsitekturnya dengan _is_roll_dominant, cek axis pitch
+        (_tilt_pitch_gyro_axis) — menolak miring (roll) / menoleh (yaw) yang
+        kebetulan proyeksi accel-nya lolos threshold tilt_up/down."""
+        if self._tilt_pitch_gyro_axis is None:
+            return True
+        mags = [abs(gyro_vec[0]), abs(gyro_vec[1]), abs(gyro_vec[2])]
+        pitch_mag = mags[self._tilt_pitch_gyro_axis]
+        if pitch_mag < self._TILT_GYRO_MIN_DPS:
+            return False
+        others = [m for i, m in enumerate(mags) if i != self._tilt_pitch_gyro_axis]
+        second_largest = max(others) if others else 0.0
+        return pitch_mag >= second_largest * self._TILT_GYRO_DOMINANCE
+
+    def _fire_tilt_updown_command(self, side: str, now: float) -> None:
+        """Sama arsitekturnya dengan _fire_tilt_command — cooldown jaw +
+        cooldown sendiri, TANPA cooldown silang ke tilt_left/right (axis
+        guard di atas sudah cukup memisahkan roll vs pitch; kalau nanti
+        terbukti ada cross-fire nyata antar axis, tambahkan di sini)."""
+        _after_jaw = (now - self._jaw_cooldown) < 2.5
+        _own_cd_ok = (now - self._tilt_ud_cooldown) > self._TILT_CMD_COOLDOWN_S
+
+        if _after_jaw or not _own_cd_ok:
+            return
+
+        self._tilt_ud_cooldown = now
+        self._last_cmd_time = now
+        self._tilt_ud_refractory_until = now + self._TILT_CMD_REFRACTORY_S
+        self._tilt_ud_rearmed = False
+        self._tilt_ud_last_fire_time = now
+        cb = self.on_tilt_up if side == "up" else self.on_tilt_down
+        print(f"↕️  Tilt {side} FIRED — val_thr={self._TILT_CMD_THRESHOLD}")
         if cb:
             try:
                 cb()

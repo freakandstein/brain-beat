@@ -179,8 +179,6 @@
     pointer-events: none;
   }
   #legend b { letter-spacing: 0.15em; color: #ffffffcc; }
-  .leg-wink-left  { color: #00eaff; }
-  .leg-wink-right { color: #ff6bd6; }
   .leg-jaw        { color: #ff5e3a; }
   .leg-relax      { color: #7cff6b; }
   .leg-sep        { color: #ffffff33; margin: 2px 0; border: none; border-top: 1px solid #ffffff18; }
@@ -276,8 +274,6 @@
 <!-- Dev legend -->
 <div id="legend">
   <div><b>MENTAL COMMAND PLAYGROUND</b></div>
-  <div class="leg-wink-left">● Wink left → Cmd A1 (EOG, AF7)</div>
-  <div class="leg-wink-right">● Wink right → Cmd A2 (EOG, AF8)</div>
   <div class="leg-jaw">● Jaw clench → Cmd B (EMG, TP9/TP10)</div>
   <div class="leg-relax">● Eyebrow raise → Cmd C (EMG, AF7/AF8)</div>
   <hr class="leg-sep">
@@ -290,16 +286,6 @@
 <!-- Keymap panel: mental command → keyboard hotkey -->
 <div id="keymap-panel">
   <div><b>KEYMAP</b></div>
-  <div class="keymap-row" data-command="wink_left">
-    <span>Wink Left</span>
-    <button class="keymap-key" data-command="wink_left" onclick="startKeyCapture(this)">—</button>
-    <button class="keymap-clear" data-command="wink_left" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
-  </div>
-  <div class="keymap-row" data-command="wink_right">
-    <span>Wink Right</span>
-    <button class="keymap-key" data-command="wink_right" onclick="startKeyCapture(this)">—</button>
-    <button class="keymap-clear" data-command="wink_right" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
-  </div>
   <div class="keymap-row" data-command="eyebrow_raise">
     <span>Eyebrow Raise</span>
     <button class="keymap-key" data-command="eyebrow_raise" onclick="startKeyCapture(this)">—</button>
@@ -324,6 +310,16 @@
     <span>Tilt Right</span>
     <button class="keymap-key" data-command="tilt_right" onclick="startKeyCapture(this)">—</button>
     <button class="keymap-clear" data-command="tilt_right" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
+  </div>
+  <div class="keymap-row" data-command="tilt_up">
+    <span>Tilt Up</span>
+    <button class="keymap-key" data-command="tilt_up" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="tilt_up" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
+  </div>
+  <div class="keymap-row" data-command="tilt_down">
+    <span>Tilt Down</span>
+    <button class="keymap-key" data-command="tilt_down" onclick="startKeyCapture(this)">—</button>
+    <button class="keymap-clear" data-command="tilt_down" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
   </div>
 </div>
 
@@ -744,24 +740,6 @@ function setActiveDots(channels) {
 // ── Command profiles ──────────────────────────────────────────────────────────
 const COMMANDS = {
   // ── Single commands ──
-  wink_left: {
-    hue: 190, accent: '#00eaff', glow: '#00aaff', accentDim: '#00eaff44',
-    label: 'EOG · AF7',
-    main:  'WINK LEFT',
-    sub:   'unilateral ocular · left frontal burst',
-    channels: ['AF7'],
-    conf: 92, lat: 10, pow: 38,
-    combo: false,
-  },
-  wink_right: {
-    hue: 320, accent: '#ff6bd6', glow: '#ff3ac4', accentDim: '#ff6bd644',
-    label: 'EOG · AF8',
-    main:  'WINK RIGHT',
-    sub:   'unilateral ocular · right frontal burst',
-    channels: ['AF8'],
-    conf: 92, lat: 10, pow: 38,
-    combo: false,
-  },
   jaw_clench: {
     hue: 14, accent: '#ff5e3a', glow: '#ff8a3a', accentDim: '#ff5e3a44',
     label: 'EMG · TP9 / TP10',
@@ -794,6 +772,24 @@ const COMMANDS = {
     label: 'ACC / GYRO',
     main:  'TILT RIGHT',
     sub:   'head roll · quick tilt-and-release',
+    channels: [],
+    conf: 88, lat: 14, pow: 68, powUnit: 'mg',
+    combo: false,
+  },
+  tilt_up: {
+    hue: 188, accent: '#5eead4', glow: '#2dd4bf', accentDim: '#5eead444',
+    label: 'ACC / GYRO',
+    main:  'TILT UP',
+    sub:   'head pitch · quick tilt-and-release',
+    channels: [],
+    conf: 88, lat: 14, pow: 68, powUnit: 'mg',
+    combo: false,
+  },
+  tilt_down: {
+    hue: 200, accent: '#38bdf8', glow: '#0ea5e9', accentDim: '#38bdf844',
+    label: 'ACC / GYRO',
+    main:  'TILT DOWN',
+    sub:   'head pitch · quick tilt-and-release',
     channels: [],
     conf: 88, lat: 14, pow: 68, powUnit: 'mg',
     combo: false,
@@ -874,13 +870,13 @@ function triggerOverlay(commandKey) {
 const socket = io();
 socket.on('connect',        () => console.log('[overlay] connected'));
 socket.on('disconnect',     () => console.log('[overlay] disconnected'));
-socket.on('wink_left',      () => triggerOverlay('wink_left'));
-socket.on('wink_right',     () => triggerOverlay('wink_right'));
 socket.on('jaw_clench',     () => triggerOverlay('jaw_clench'));
 socket.on('eyebrow_raise',  () => triggerOverlay('eyebrow_raise'));
 socket.on('double_jaw',     () => triggerOverlay('double_jaw'));
 socket.on('tilt_left',      () => triggerOverlay('tilt_left'));
 socket.on('tilt_right',     () => triggerOverlay('tilt_right'));
+socket.on('tilt_up',        () => triggerOverlay('tilt_up'));
+socket.on('tilt_down',      () => triggerOverlay('tilt_down'));
 
 // Dev keys: Shift+1 … Shift+7
 document.addEventListener('keydown', e => {
@@ -888,13 +884,13 @@ document.addEventListener('keydown', e => {
   const tag = (e.target && e.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
   if (!e.shiftKey) return;
-  if (e.code === 'Digit1') triggerOverlay('wink_left');
-  if (e.code === 'Digit2') triggerOverlay('wink_right');
-  if (e.code === 'Digit3') triggerOverlay('jaw_clench');
-  if (e.code === 'Digit4') triggerOverlay('eyebrow_raise');
-  if (e.code === 'Digit5') triggerOverlay('double_jaw');
-  if (e.code === 'Digit6') triggerOverlay('tilt_left');
-  if (e.code === 'Digit7') triggerOverlay('tilt_right');
+  if (e.code === 'Digit1') triggerOverlay('jaw_clench');
+  if (e.code === 'Digit2') triggerOverlay('eyebrow_raise');
+  if (e.code === 'Digit3') triggerOverlay('double_jaw');
+  if (e.code === 'Digit4') triggerOverlay('tilt_left');
+  if (e.code === 'Digit5') triggerOverlay('tilt_right');
+  if (e.code === 'Digit6') triggerOverlay('tilt_up');
+  if (e.code === 'Digit7') triggerOverlay('tilt_down');
 });
 
 // ── Keymap panel: capture a key and send it to the server ─────────────────

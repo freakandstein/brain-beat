@@ -218,7 +218,11 @@ class MusicEngine:
         self._arousal_buf   = deque(maxlen=480)
         self._adaptive_threshold = 0.02    # default lebih tinggi — bias ke calm
         self._warmup_ticks  = 60           # 15 detik × 4 tick/detik
-        self._muted = False
+        # Default silent saat start — fitur drum music dimatikan by default,
+        # tapi synth & _tick_drums tetap jalan penuh (BPM/state tracking
+        # dipakai UI tetap perlu ini) dan tombol mute UI tetap fungsional
+        # kalau suatu saat mau didengar lagi (lihat set_muted/on_set_mute).
+        self._muted = True
 
         self.fs = fluidsynth.Synth(gain=0.8, samplerate=44100.0)
         self.fs.start(driver="coreaudio")
@@ -232,7 +236,11 @@ class MusicEngine:
         # Reverb hangat untuk drums
         self.fs.set_reverb(roomsize=0.5, damping=0.6, width=0.7, level=0.4)
         self.fs.set_chorus(0, 0.0, 0.3, 0.5, 0)
-        print("✅  Brainwave Monitor siap.")
+        # Terapkan _muted=True di atas ke MIDI CC7 (channel volume) — tanpa
+        # ini, flag Python sudah True tapi FluidSynth channel drum tetap di
+        # volume default (127) sampai set_muted() dipanggil sekali dari UI.
+        self.fs.cc(CH_DRUMS, 7, 0)
+        print("✅  Brainwave Monitor siap. (drum audio: muted by default)")
 
     # ── public API ──────────────────────────────────────────────────────────
 

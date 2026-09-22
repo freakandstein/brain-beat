@@ -1,8 +1,8 @@
 """
 Keyboard Connector
 ===================
-Mapping mental command (wink_left, wink_right, eyebrow_raise, jaw_clench,
-double_jaw) ke keystroke OS yang bisa dikonfigurasi.
+Mapping mental command (eyebrow_raise, jaw_clench, double_jaw) ke keystroke OS
+yang bisa dikonfigurasi.
 
 Dua metode pengiriman keystroke, dipilih otomatis per-command lewat
 _HID_TAP_COMMANDS:
@@ -23,9 +23,9 @@ seperti "left", "a", "space", "cmd+shift+1").
 Penggunaan:
     from keyboard_connector import KeyboardConnector
     kb = KeyboardConnector()
-    kb.press("wink_left")          # tekan key yang di-map ke wink_left
-    kb.set_mapping("wink_left", "left")
-    kb.get_mapping()                # {"wink_left": "left", ...}
+    kb.press("eyebrow_raise")          # tekan key yang di-map ke eyebrow_raise
+    kb.set_mapping("eyebrow_raise", "up")
+    kb.get_mapping()                    # {"eyebrow_raise": "up", ...}
 """
 
 import json
@@ -61,12 +61,15 @@ KEYMAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keymap.j
 # sebelumnya luput didaftarkan di sini saat ditambahkan ke keymap.json,
 # sehingga lewat pynput dan jadi kadang-jalan-kadang-tidak sedangkan
 # tilt_right (sudah HID tap dari awal) selalu andal.
-# wink_left/wink_right/eyebrow_raise → sama-sama menuju DuckStation
-# (navigasi menu battle), jadi didaftarkan preventif dari awal supaya
-# tidak mengulang pola "kelupaan didaftarkan" yang terjadi pada tilt_left.
+# eyebrow_raise → menuju DuckStation (navigasi menu battle), jadi
+# didaftarkan preventif dari awal supaya tidak mengulang pola "kelupaan
+# didaftarkan" yang terjadi pada tilt_left.
+# tilt_up/tilt_down → belum ada mapping di keymap.json (baru ditambah di
+# sisi deteksi brainflow_connector.py), tapi didaftarkan preventif di sini
+# dari awal juga — alasan sama persis dengan eyebrow di atas.
 _HID_TAP_COMMANDS = {
-    "tilt_right", "tilt_left", "jaw_clench", "double_jaw",
-    "wink_left", "wink_right", "eyebrow_raise",
+    "tilt_right", "tilt_left", "tilt_up", "tilt_down", "jaw_clench", "double_jaw",
+    "eyebrow_raise",
 }
 
 # Nama tombol khusus (non-karakter) yang didukung — selain ini dikirim sebagai
@@ -107,8 +110,6 @@ _MACOS_MODIFIER_FLAGS = {
 } if QUARTZ_AVAILABLE else {}
 
 DEFAULT_KEYMAP = {
-    "wink_left":     "left",
-    "wink_right":    "right",
     "eyebrow_raise": "up",
     "jaw_clench":    "down",
     "double_jaw":    "space",
@@ -220,8 +221,14 @@ class KeyboardConnector:
             # keyboard per-frame, ~16ms @ 60fps) sehingga tombol "tertekan"
             # tapi tidak pernah terlihat — gejalanya event terkirim tanpa
             # error tapi game kadang merespon kadang tidak, tergantung
-            # timing relatif terhadap frame. 50ms > 1 frame di beban berat.
-            time.sleep(0.05)
+            # timing relatif terhadap frame. Sebelumnya 50ms (>1 frame di
+            # beban berat) — dinaikkan ke 120ms karena proses EEG di mesin
+            # yang sama rutin membebani CPU tiap tick (bandpass+Welch PSD),
+            # yang bisa membuat frame time DuckStation sendiri melebar jauh
+            # di atas 50ms tepat saat gesture terdeteksi (beban EEG lagi
+            # tinggi di momen yang sama). 120ms kasih margin jauh lebih
+            # besar tanpa terasa lag untuk manusia.
+            time.sleep(0.12)
 
             up = Quartz.CGEventCreateKeyboardEvent(None, keycode, False)
             Quartz.CGEventSetFlags(up, flags)
@@ -232,18 +239,18 @@ class KeyboardConnector:
             try:
                 with open(self.keymap_path, "r") as f:
                     data = json.load(f)
+                # File yang ada di disk berarti sudah PERNAH ditulis _save()
+                # (dipanggil hanya dari set_mapping(), yaitu saat user
+                # menyimpan lewat UI) — jadi jadi sumber kebenaran penuh,
+                # apapun isinya. Entry kosong berarti user SENGAJA meng-
+                # clear command itu (lihat set_mapping / eeg_server.py
+                # on_set_keymap) dan harus tetap kosong, bukan diam-diam
+                # kembali ke default tiap restart — termasuk saat SEMUA
+                # entry kosong sekaligus (mis. user clear semua mapping).
+                # Command yang belum pernah dikenal sama sekali (tidak ada
+                # di file) tetap fallback ke DEFAULT_KEYMAP per-key.
                 merged = dict(DEFAULT_KEYMAP)
-                # File yang SEMUA-nya kosong (mis. template awal yang belum
-                # pernah disentuh UI) tidak boleh mematikan semua command —
-                # itu masih fallback total ke DEFAULT_KEYMAP. Tapi begitu
-                # ADA minimal satu entry non-kosong (artinya user pernah
-                # menyimpan lewat UI/set_mapping), file itu jadi sumber
-                # kebenaran penuh: entry kosong di dalamnya berarti user
-                # SENGAJA meng-clear command itu (lihat set_mapping /
-                # eeg_server.py on_set_keymap) dan harus tetap kosong,
-                # bukan diam-diam kembali ke default tiap restart.
-                if any(v for v in data.values()):
-                    merged.update(data)
+                merged.update(data)
                 return merged
             except Exception:
                 pass

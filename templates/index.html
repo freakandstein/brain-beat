@@ -189,7 +189,11 @@ body {
     box-shadow: inset 0 1px 0 #ffffff05;
     padding: 17px 19px 15px;
     margin: 7px 0 11px;
-    transition: background 1.2s ease, box-shadow 1.2s ease;
+    transition: background 1.2s ease, box-shadow 1.2s ease, border-color 0.2s ease;
+}
+.main-card.mental-flash {
+    border-color: #5eead4;
+    box-shadow: inset 0 1px 0 #ffffff05, 0 0 18px #5eead460;
 }
 
 /* ── State row ──────────────────────────────────────── */
@@ -289,40 +293,6 @@ body {
 }
 
 
-/* ── Mental Command ─────────────────────────────────── */
-.mental-inline {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    border-radius: 6px;
-    padding: 2px 4px 2px 3px;
-    transition: background 0.3s;
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    white-space: nowrap;
-}
-.mental-inline.flash {
-    background: #2dd4bf12;
-}
-.mental-scene {
-    font-family: var(--font-data);
-    font-size: 0.82rem;
-    font-weight: 400;
-    color: #5eead4;
-    white-space: nowrap;
-}
-.mental-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: #1c3b35;
-    flex-shrink: 0;
-    transition: background 0.2s, box-shadow 0.2s;
-}
-.mental-dot.active {
-    background: #5eead4;
-    box-shadow: 0 0 8px #5eead490;
-}
 
 /* ── EEG + Map row ───────────────────────────────────── */
 .eeg-map-row {
@@ -509,11 +479,7 @@ body {
         <div id="state-desc">Calm / Relaxed</div>
       </div>
       <div class="state-row-right">
-        <div class="hr-badge">&#9829; <span id="hr-val">—</span></div>
-        <div class="mental-inline" id="mental-card" style="display:none">
-          <div class="mental-dot" id="mental-dot"></div>
-          <div class="mental-scene" id="mental-scene"></div>
-        </div>
+        <div class="hr-badge" id="hr-badge">&#9829; <span id="hr-val">—</span></div>
       </div>
     </div>
 
@@ -735,14 +701,22 @@ socket.on('state_update', (d) => {
   // begitu phase pindah ke "ready". tilt_calib_progress ("N/3") ditampilkan
   // di banner supaya user tahu ini masih berjalan / harus diulang, bukan
   // macet — tanpa ini durasi panjang terasa seperti sistem hang.
+  // Fase "up" — kalibrasi tilt_up/tilt_down, jalan SETELAH fase "right" di
+  // atas selesai (lihat _run_tilt_calibration). Sama filosofinya: banner
+  // cuma tampil utk "right"/"up" (kalibrasi blocking asli), TIDAK utk
+  // "right_refresh"/"up_refresh" (refresh diam-diam di background, user
+  // sudah bisa pakai tilt_left/right dari cache selagi ini jalan).
   if (d.tilt_calib_phase && d.tilt_calib_phase !== tiltCalibPhase) {
     tiltCalibPhase = d.tilt_calib_phase;
-    document.getElementById('tilt-calib-banner').classList.toggle('show', tiltCalibPhase === 'right');
+    document.getElementById('tilt-calib-banner').classList.toggle(
+      'show', tiltCalibPhase === 'right' || tiltCalibPhase === 'up');
   }
-  if (tiltCalibPhase === 'right' && typeof d.tilt_calib_progress === 'string') {
+  if ((tiltCalibPhase === 'right' || tiltCalibPhase === 'up') && typeof d.tilt_calib_progress === 'string') {
     const _progressSuffix = d.tilt_calib_progress ? ` [${d.tilt_calib_progress}]` : '';
-    document.getElementById('tilt-calib-banner').innerHTML =
-      '&#x27A1;&#xFE0F; Miringkan kepala ke KANAN (mantap), lalu kembali tegak — ULANGI 3x dengan jeda santai di antaranya (kalibrasi tilt command)...' + _progressSuffix;
+    const _instruction = tiltCalibPhase === 'right'
+      ? '&#x27A1;&#xFE0F; Miringkan kepala ke KANAN (mantap), lalu kembali tegak — ULANGI 3x dengan jeda santai di antaranya (kalibrasi tilt kiri/kanan)...'
+      : '&#x2B06;&#xFE0F; Angguk-kan kepala ke ATAS (mantap), lalu kembali tegak — ULANGI 3x dengan jeda santai di antaranya (kalibrasi tilt atas/bawah)...';
+    document.getElementById('tilt-calib-banner').innerHTML = _instruction + _progressSuffix;
   }
 
   const sp = d.spectrum_pos ?? 0.2;
@@ -898,31 +872,17 @@ socket.on('muse_scan_result', (d) => {
 });
 
 // ── Mental Commands ────────────────────────────────────────────────────────
-const mentalScenes = {
-  wink:         'Scene 1',
-  jaw_clench:   'Scene 2',
-  eyebrow_raise:'Scene 3',
-};
-
 let _mentalFlashTimer = null;
 
 function triggerMental(event) {
-  const scene = mentalScenes[event] || 'Scene ?';
-  const card  = document.getElementById('mental-card');
-  const dot   = document.getElementById('mental-dot');
-  const el    = document.getElementById('mental-scene');
+  const card = document.querySelector('.main-card');
 
-  el.textContent = scene + ' by brain signal';
-  card.style.display = '';
-  dot.classList.add('active');
-  card.classList.add('flash');
+  card.classList.add('mental-flash');
   fireRipple();
 
   clearTimeout(_mentalFlashTimer);
   _mentalFlashTimer = setTimeout(() => {
-    card.style.display = 'none';
-    dot.classList.remove('active');
-    card.classList.remove('flash');
+    card.classList.remove('mental-flash');
   }, 2500);
 }
 
@@ -935,7 +895,6 @@ function fireRipple() {
   ripple.classList.add('firing');
 }
 
-socket.on('wink',          () => triggerMental('wink'));
 socket.on('jaw_clench',    () => triggerMental('jaw_clench'));
 socket.on('eyebrow_raise', () => triggerMental('eyebrow_raise'));
 
