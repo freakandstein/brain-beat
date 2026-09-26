@@ -1,6 +1,9 @@
 {
-  "eyebrow_raise": "x",
-  "jaw_clench": "",
-  "double_jaw": "",
-  "tilt_right": ""
+  "eyebrow_raise": "e",
+  "jaw_clench": "x",
+  "double_jaw": "q",
+  "tilt_right": "d",
+  "tilt_up": "w",
+  "tilt_down": "s",
+  "tilt_left": "a"
 }

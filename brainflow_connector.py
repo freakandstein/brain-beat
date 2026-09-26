@@ -1023,14 +1023,25 @@ class MuseConnector:
             for _k in _cmd_diag:
                 _cmd_diag[_k] = ""
 
-            # Subprocess health check
+            # Subprocess health check — muselsl mati sendiri (BLE putus di
+            # level OS, device power off/keluar jangkauan, crash) DITEMUKAN
+            # LEWAT BUG NYATA: dulu ini cuma `break` diam-diam, membuat
+            # _loop() return NORMAL tanpa exception. _connect_thread lalu
+            # salah mengira ini disconnect() manual (yang juga bikin _loop
+            # return normal) dan set status "error" permanen alih-alih
+            # "reconnecting" — padahal koneksi putus tak terduga seharusnya
+            # auto-retry sama seperti kegagalan lain. disconnect() sendiri
+            # aman dari exception ini karena selalu set self._cancel LEBIH
+            # DULU (lihat disconnect()) sebelum _kill_proc() mematikan
+            # subprocess, jadi while self.running di atas sudah keluar
+            # duluan pada iterasi berikutnya sebelum sempat sampai ke sini.
             if self._stream_proc and self._stream_proc.poll() is not None:
                 err = self._read_err_log()
                 msg = f"muselsl process exited (code={self._stream_proc.returncode})"
                 if err:
                     msg += f"\n  muselsl: {err}"
                 print(f"⚠️  {msg}")
-                break
+                raise Exception(msg)
 
             # ── Pull EEG ─────────────────────────────────────────────────
             try:

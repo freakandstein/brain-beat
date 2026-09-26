@@ -215,6 +215,32 @@ def on_set_keymap(data):
     socketio.emit("keymap", keyboard_connector.get_mapping())
 
 
+# ── OBS Keymap (command → OBS scene, terpisah dari keyboard keymap di atas) ──
+
+@socketio.on("get_obs_keymap")
+def on_get_obs_keymap():
+    socketio.emit("obs_keymap", obs_connector.get_scene_mapping())
+
+
+@socketio.on("set_obs_keymap")
+def on_set_obs_keymap(data):
+    command = (data.get("command") or "").strip()
+    # Sama semantiknya dengan on_set_keymap di atas — "scene" absen berarti
+    # request malformed, "" eksplisit berarti user sengaja clear mapping ini.
+    if "scene" not in data or not command:
+        return
+    scene = (data.get("scene") or "").strip()
+    obs_connector.set_scene_mapping(command, scene)
+    socketio.emit("obs_keymap", obs_connector.get_scene_mapping())
+
+
+@socketio.on("get_obs_scenes")
+def on_get_obs_scenes():
+    """Daftar nama scene OBS saat ini (untuk dropdown OBS Keymap UI) — list
+    kosong kalau OBS belum connect, UI fallback ke text input manual."""
+    socketio.emit("obs_scenes", obs_connector.get_scene_list())
+
+
 @socketio.on("muse_scan")
 def on_muse_scan():
     """Scan BLE devices dan emit hasilnya ke browser."""
@@ -389,9 +415,7 @@ def main():
         def _double_jaw_cb():
             print("🦷🦷  Double jaw detected — triggering overlay")
             socketio.emit("double_jaw", {})
-            # Belum ada scene mapping untuk double_jaw — dipakai sebagai
-            # hotkey toggle start/stop recording OBS, bukan scene switch.
-            obs_connector.toggle_record()
+            obs_connector.switch_scene("double_jaw")
             keyboard_connector.press("double_jaw")
 
         def _tilt_left_cb():

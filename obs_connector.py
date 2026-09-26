@@ -2,7 +2,10 @@
 OBS Connector
 =============
 Menghubungkan mental command dari EEG ke OBS WebSocket v5.
-Tiap command di-mapping ke nama scene OBS yang bisa dikonfigurasi.
+Tiap command di-mapping ke nama scene OBS yang bisa dikonfigurasi lewat UI
+(OBS Keymap panel — lihat set_scene_mapping/get_scene_mapping) dan disimpan
+persist di obs_keymap.json, sama arsitekturnya dengan KeyboardConnector's
+keymap.json (lihat keyboard_connector.py).
 
 Penggunaan:
     from obs_connector import OBSConnector
@@ -11,6 +14,8 @@ Penggunaan:
     obs.switch_scene("jaw_clench")  # → scene yang di-map ke "jaw_clench"
 """
 
+import json
+import os
 import threading
 
 try:
@@ -19,6 +24,8 @@ try:
 except ImportError:
     OBS_AVAILABLE = False
 
+OBS_KEYMAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "obs_keymap.json")
+
 
 class OBSConnector:
     """
@@ -26,20 +33,17 @@ class OBSConnector:
     Auto-reconnect saat scene switch gagal.
     """
 
-    # DEFAULT_SCENE_MAP = {
-    #     "jaw_clench":    "Scene 2 (3 Views)",
-    #     "eyebrow_raise": "Scene 3 (2 Views Without Front)",
-    #     "tilt_left":     "Scene 1 (2 Views Without Top)",
-    #     # tilt_right TIDAK switch scene — murni keystroke Command+B (lihat
-    #     # eeg_server.py _tilt_right_cb), None → switch_scene() no-op.
-    #     "tilt_right":    None,
-    # }
-
+    # Command yang punya slot OBS Keymap — sama persis dengan command yang
+    # punya slot di KeyboardConnector (lihat keyboard_connector.py
+    # DEFAULT_KEYMAP) supaya kedua panel UI (Keymap & OBS Keymap) konsisten.
     DEFAULT_SCENE_MAP = {
-        "jaw_clench":    None,
         "eyebrow_raise": None,
+        "jaw_clench":    None,
+        "double_jaw":    None,
         "tilt_left":     None,
         "tilt_right":    None,
+        "tilt_up":       None,
+        "tilt_down":     None,
     }
 
     def __init__(
@@ -48,15 +52,16 @@ class OBSConnector:
         port: int = 4455,
         password: str = "",
         scene_map: dict = None,
+        keymap_path: str = OBS_KEYMAP_PATH,
     ):
         self.host      = host
         self.port      = port
         self.password  = password
-        self.scene_map = scene_map if scene_map is not None else dict(self.DEFAULT_SCENE_MAP)
+        self.keymap_path = keymap_path
+        self.scene_map = scene_map if scene_map is not None else self._load()
 
         self._client = None
         self._lock   = threading.Lock()
-        self._is_recording = False
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -90,9 +95,19 @@ class OBSConnector:
             return
         threading.Thread(target=self._do_switch, args=(command, scene), daemon=True).start()
 
-    def toggle_record(self):
-        """Toggle recording OBS: belum recording → start, sedang recording → stop. Non-blocking."""
-        threading.Thread(target=self._do_toggle_record, daemon=True).start()
+    def get_scene_mapping(self) -> dict:
+        """Return copy dari scene_map saat ini (untuk OBS Keymap UI)."""
+        with self._lock:
+            return dict(self.scene_map)
+
+    def set_scene_mapping(self, command: str, scene: str) -> None:
+        """Set/clear mapping command → scene, lalu persist ke obs_keymap.json.
+        scene="" eksplisit → command ini sengaja di-clear (switch_scene()
+        jadi no-op utk command itu), sama semantiknya dengan
+        KeyboardConnector.set_mapping (lihat keyboard_connector.py)."""
+        with self._lock:
+            self.scene_map[command] = scene
+            self._save()
 
     def get_scene_list(self) -> list[str]:
         """Return daftar nama scene dari OBS (untuk debugging/konfigurasi)."""
@@ -106,6 +121,32 @@ class OBSConnector:
             return []
 
     # ── internal ──────────────────────────────────────────────────────────────
+
+    def _load(self) -> dict:
+        """Sama arsitekturnya dengan KeyboardConnector._load (lihat
+        keyboard_connector.py) — file yang ada di disk berarti sudah pernah
+        ditulis _save() (dipanggil hanya dari set_scene_mapping(), yaitu
+        saat user menyimpan lewat UI), jadi jadi sumber kebenaran penuh
+        apapun isinya, termasuk saat SEMUA entry kosong sekaligus. Command
+        yang belum pernah dikenal sama sekali (tidak ada di file) tetap
+        fallback ke DEFAULT_SCENE_MAP per-key."""
+        if os.path.exists(self.keymap_path):
+            try:
+                with open(self.keymap_path, "r") as f:
+                    data = json.load(f)
+                merged = dict(self.DEFAULT_SCENE_MAP)
+                merged.update(data)
+                return merged
+            except Exception:
+                pass
+        return dict(self.DEFAULT_SCENE_MAP)
+
+    def _save(self) -> None:
+        try:
+            with open(self.keymap_path, "w") as f:
+                json.dump(self.scene_map, f, indent=2)
+        except OSError as e:
+            print(f"⚠️  Gagal menyimpan obs_keymap.json: {e}")
 
     def _do_switch(self, command: str, scene: str):
         with self._lock:
@@ -132,40 +173,3 @@ class OBSConnector:
                     print(f"🎬  OBS scene → {scene} (setelah reconnect)")
                 except Exception as e2:
                     print(f"⚠️  OBS scene switch tetap gagal: {e2}")
-
-    def _do_toggle_record(self):
-        with self._lock:
-            cl = self._client
-        if cl is None:
-            self.connect()
-            with self._lock:
-                cl = self._client
-        if cl is None:
-            return
-
-        try:
-            self._toggle_record_with_client(cl)
-        except Exception as e:
-            print(f"⚠️  OBS record toggle gagal: {e} — mencoba reconnect...")
-            with self._lock:
-                self._client = None
-            if self.connect():
-                with self._lock:
-                    cl2 = self._client
-                try:
-                    self._toggle_record_with_client(cl2)
-                except Exception as e2:
-                    print(f"⚠️  OBS record toggle tetap gagal: {e2}")
-
-    def _toggle_record_with_client(self, cl):
-        # Tanya status asli ke OBS dulu (bukan asumsi dari _is_recording lokal) —
-        # supaya tetap akurat kalau user juga start/stop manual dari OBS.
-        status = cl.get_record_status()
-        if status.output_active:
-            cl.stop_record()
-            self._is_recording = False
-            print("⏹️  OBS recording STOPPED (trigger: double_jaw)")
-        else:
-            cl.start_record()
-            self._is_recording = True
-            print("⏺️  OBS recording STARTED (trigger: double_jaw)")

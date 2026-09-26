@@ -242,6 +242,38 @@
   }
   .keymap-clear:hover { border-color: #ff6b6b88; color: #ff6b6bcc; }
 
+  /* ── OBS Keymap panel (command → OBS scene, bottom-right) ── */
+  #obs-keymap-panel {
+    position: fixed;
+    bottom: 18px; right: 18px;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    color: #ffffffaa;
+    background: rgba(0, 8, 25, 0.6);
+    border: 1px solid #ffffff18;
+    border-radius: 4px;
+    padding: 10px 14px;
+    line-height: 1.9;
+  }
+  #obs-keymap-panel b { letter-spacing: 0.15em; color: #ffffffcc; }
+  .obs-scene-select {
+    font-family: 'Courier New', monospace;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid #ffffff2a;
+    background: #0a1830;
+    color: #ffffffaa;
+    cursor: pointer;
+    max-width: 150px;
+    transition: all 0.15s;
+  }
+  .obs-scene-select:hover { border-color: #ffffff66; color: #ffffffee; }
+  .obs-scene-select:focus { border-color: #00eaff; outline: none; }
+  .obs-scene-select option { background: #0a1830; color: #ffffffdd; }
+
   /* ── Combo badge (shown inside HUD for combo commands) ── */
   #combo-badge {
     font-size: clamp(0.38rem, 0.6vw, 0.55rem);
@@ -320,6 +352,50 @@
     <span>Tilt Down</span>
     <button class="keymap-key" data-command="tilt_down" onclick="startKeyCapture(this)">—</button>
     <button class="keymap-clear" data-command="tilt_down" title="Clear mapping" onclick="clearKeyMapping(this)">✕</button>
+  </div>
+</div>
+
+<!-- OBS Keymap panel: mental command → OBS scene (independen dari Keymap
+     di atas — lihat obs_connector.py, keduanya bisa aktif bersamaan) -->
+<div id="obs-keymap-panel">
+  <div class="keymap-row">
+    <b>OBS KEYMAP</b>
+    <button class="keymap-clear" title="Refresh scene list dari OBS" onclick="socket.emit('get_obs_scenes')">↻</button>
+  </div>
+  <div class="keymap-row" data-command="eyebrow_raise">
+    <span>Eyebrow Raise</span>
+    <select class="obs-scene-select" data-command="eyebrow_raise" onchange="setObsSceneMapping(this)"></select>
+    <button class="keymap-clear" data-command="eyebrow_raise" title="Clear mapping" onclick="clearObsSceneMapping(this)">✕</button>
+  </div>
+  <div class="keymap-row" data-command="jaw_clench">
+    <span>Jaw Clench</span>
+    <select class="obs-scene-select" data-command="jaw_clench" onchange="setObsSceneMapping(this)"></select>
+    <button class="keymap-clear" data-command="jaw_clench" title="Clear mapping" onclick="clearObsSceneMapping(this)">✕</button>
+  </div>
+  <div class="keymap-row" data-command="double_jaw">
+    <span>Double Jaw</span>
+    <select class="obs-scene-select" data-command="double_jaw" onchange="setObsSceneMapping(this)"></select>
+    <button class="keymap-clear" data-command="double_jaw" title="Clear mapping" onclick="clearObsSceneMapping(this)">✕</button>
+  </div>
+  <div class="keymap-row" data-command="tilt_left">
+    <span>Tilt Left</span>
+    <select class="obs-scene-select" data-command="tilt_left" onchange="setObsSceneMapping(this)"></select>
+    <button class="keymap-clear" data-command="tilt_left" title="Clear mapping" onclick="clearObsSceneMapping(this)">✕</button>
+  </div>
+  <div class="keymap-row" data-command="tilt_right">
+    <span>Tilt Right</span>
+    <select class="obs-scene-select" data-command="tilt_right" onchange="setObsSceneMapping(this)"></select>
+    <button class="keymap-clear" data-command="tilt_right" title="Clear mapping" onclick="clearObsSceneMapping(this)">✕</button>
+  </div>
+  <div class="keymap-row" data-command="tilt_up">
+    <span>Tilt Up</span>
+    <select class="obs-scene-select" data-command="tilt_up" onchange="setObsSceneMapping(this)"></select>
+    <button class="keymap-clear" data-command="tilt_up" title="Clear mapping" onclick="clearObsSceneMapping(this)">✕</button>
+  </div>
+  <div class="keymap-row" data-command="tilt_down">
+    <span>Tilt Down</span>
+    <select class="obs-scene-select" data-command="tilt_down" onchange="setObsSceneMapping(this)"></select>
+    <button class="keymap-clear" data-command="tilt_down" title="Clear mapping" onclick="clearObsSceneMapping(this)">✕</button>
   </div>
 </div>
 
@@ -966,6 +1042,90 @@ socket.on('keymap', (map) => {
 });
 
 socket.on('connect', () => socket.emit('get_keymap'));
+
+// ── OBS Keymap: command → OBS scene ─────────────────────────────────────────
+// Independen dari keyboard keymap di atas — lihat obs_connector.py. Dropdown
+// diisi live dari get_scene_list() (via get_obs_scenes) kalau OBS connect;
+// kalau OBS belum connect / daftar kosong, fallback opsi "Custom..." dengan
+// prompt teks manual, supaya mapping tetap bisa diisi lebih dulu.
+let _obsScenes = [];
+let _obsMapping = {};
+
+function _rebuildObsSceneOptions(selectEl, currentValue) {
+  selectEl.innerHTML = '';
+  const optEmpty = document.createElement('option');
+  optEmpty.value = '';
+  optEmpty.textContent = '— (none)';
+  selectEl.appendChild(optEmpty);
+
+  for (const scene of _obsScenes) {
+    const opt = document.createElement('option');
+    opt.value = scene;
+    opt.textContent = scene;
+    selectEl.appendChild(opt);
+  }
+
+  // currentValue bisa scene lama yang sudah tidak ada lagi di OBS (mis. scene
+  // di-rename/dihapus di OBS setelah mapping disimpan) — tetap tampilkan
+  // sebagai opsi supaya user tidak kehilangan konteks mapping-nya.
+  if (currentValue && !_obsScenes.includes(currentValue)) {
+    const optStale = document.createElement('option');
+    optStale.value = currentValue;
+    optStale.textContent = currentValue + ' (not in OBS)';
+    selectEl.appendChild(optStale);
+  }
+
+  const optCustom = document.createElement('option');
+  optCustom.value = '__custom__';
+  optCustom.textContent = 'Custom...';
+  selectEl.appendChild(optCustom);
+
+  selectEl.value = currentValue || '';
+}
+
+function _repaintObsKeymap() {
+  document.querySelectorAll('.obs-scene-select').forEach((sel) => {
+    const command = sel.dataset.command;
+    _rebuildObsSceneOptions(sel, _obsMapping[command] || '');
+  });
+}
+
+function setObsSceneMapping(selectEl) {
+  const command = selectEl.dataset.command;
+  let scene = selectEl.value;
+
+  if (scene === '__custom__') {
+    const manual = prompt('Nama scene OBS (persis, case-sensitive):', _obsMapping[command] || '');
+    if (manual === null) {
+      // Dibatalkan — kembalikan dropdown ke mapping tersimpan, jangan kirim apa-apa.
+      _rebuildObsSceneOptions(selectEl, _obsMapping[command] || '');
+      return;
+    }
+    scene = manual.trim();
+  }
+
+  socket.emit('set_obs_keymap', { command, scene });
+}
+
+function clearObsSceneMapping(clearBtn) {
+  const command = clearBtn.dataset.command;
+  socket.emit('set_obs_keymap', { command, scene: '' });
+}
+
+socket.on('obs_scenes', (scenes) => {
+  _obsScenes = scenes || [];
+  _repaintObsKeymap();
+});
+
+socket.on('obs_keymap', (map) => {
+  _obsMapping = map || {};
+  _repaintObsKeymap();
+});
+
+socket.on('connect', () => {
+  socket.emit('get_obs_keymap');
+  socket.emit('get_obs_scenes');
+});
 </script>
 </body>
 </html>
