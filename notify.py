@@ -1,10 +1,11 @@
 """
 Notify
 ======
-Script kecil berdiri sendiri untuk kirim notifikasi ke ntfy topic
-"BosTioGaming" — sama tujuan dan endpoint dengan eeg_smart_comment.py,
-tapi tanpa perlu jalankan server EEG. Berguna untuk testing manual atau
-kirim pesan ad-hoc kapan saja.
+Script kecil berdiri sendiri untuk kirim notifikasi ke ntfy topic yang diisi
+lewat NTFY_TOPIC (env var atau file .env — lihat local_config.py dan
+.env.example) — sama tujuan dan endpoint dengan eeg_smart_comment.py, tapi
+tanpa perlu jalankan server EEG. Berguna untuk testing manual atau kirim
+pesan ad-hoc kapan saja.
 
 Penggunaan:
     python notify.py "teks yang mau dikirim"
@@ -24,18 +25,22 @@ warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*"
 
 import requests
 
-TOPIC = "BosTioGaming"
+import local_config
 
 
 def send(text: str) -> bool:
+    topic = local_config.get("NTFY_TOPIC")
+    if not topic:
+        print("⚠️  NTFY_TOPIC belum diisi (isi di .env, lihat .env.example, atau export NTFY_TOPIC=...)")
+        return False
     try:
         resp = requests.post(
-            f"https://ntfy.sh/{TOPIC}",
+            f"https://ntfy.sh/{topic}",
             data=text.encode("utf-8"),
             timeout=5,
         )
         resp.raise_for_status()
-        print(f"✅  Terkirim ke ntfy/{TOPIC}: {text!r}")
+        print(f"✅  Terkirim ke ntfy/{topic}: {text!r}")
         return True
     except Exception as e:
         print(f"⚠️  Gagal kirim ke ntfy: {e}")

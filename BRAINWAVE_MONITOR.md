@@ -317,7 +317,7 @@ Scene names can be changed in `obs_connector.py` → `DEFAULT_SCENE_MAP`.
 
 **Setup:**
 1. OBS → Tools → WebSocket Server Settings → Enable
-2. Set password in `eeg_server.py`: `OBSConnector(password="...")`
+2. Copy `.env.example` to `.env` and set `OBS_PASSWORD` to the WebSocket password (`.env` is git-ignored; a real `OBS_PASSWORD` environment variable works too)
 3. Make sure scene names in `DEFAULT_SCENE_MAP` match exactly what's in OBS
 
 Connection is established at startup and auto-reconnects if OBS restarts.

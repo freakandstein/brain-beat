@@ -9,3 +9,6 @@ graft/
 # Local tooling config — machine-specific, not part of the project.
 .mcp.json
 .ignore
+
+# Local secrets (OBS password, ntfy topic) — copy .env.example to .env.
+.env

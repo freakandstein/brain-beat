@@ -18,15 +18,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 PORT = 8765
 
+import local_config
 from obs_connector import OBSConnector
 from keyboard_connector import KeyboardConnector
 from mouse_connector import MouseConnector
 from eeg_smart_comment import SmartCommentBot, VALID_COMMANDS as SMART_COMMENT_COMMANDS
 
-obs_connector = OBSConnector(password="OmU3IAuGtlNcUPUY")
+obs_connector = OBSConnector(password=local_config.get("OBS_PASSWORD", ""))
 keyboard_connector = KeyboardConnector()
 mouse_connector = MouseConnector()
-smart_comment = SmartCommentBot(topic="BosTioGaming")
+smart_comment = SmartCommentBot(topic=local_config.get("NTFY_TOPIC"))
 
 
 def _parse_args():

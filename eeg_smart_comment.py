@@ -18,9 +18,14 @@ arsitekturnya dengan KeyboardConnector/OBSConnector (lihat keyboard_
 connector.py, obs_connector.py) — file di disk adalah sumber kebenaran
 penuh begitu pernah ditulis lewat UI.
 
+Topic ntfy TIDAK di-hardcode di source: diisi lewat NTFY_TOPIC (env var atau
+file .env — lihat local_config.py dan .env.example). Topic kosong = tidak ada
+komentar yang dikirim.
+
 Penggunaan:
+    import local_config
     from eeg_smart_comment import SmartCommentBot
-    bot = SmartCommentBot(topic="BosTioGaming")
+    bot = SmartCommentBot(topic=local_config.get("NTFY_TOPIC"))
     bot.maybe_send(command)   # no-op kalau command bukan trigger aktif
 """
 
@@ -159,6 +164,9 @@ class SmartCommentBot:
             return self._comments.pop()
 
     def _do_send(self) -> None:
+        if not self.topic:
+            print("⚠️  Smart Comment: NTFY_TOPIC belum diisi (isi di .env, lihat .env.example) — komentar tidak dikirim.")
+            return
         comment = self._next_comment()
         if comment is None:
             return
