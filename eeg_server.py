@@ -21,10 +21,12 @@ PORT = 8765
 from obs_connector import OBSConnector
 from keyboard_connector import KeyboardConnector
 from mouse_connector import MouseConnector
+from eeg_smart_comment import SmartCommentBot, VALID_COMMANDS as SMART_COMMENT_COMMANDS
 
 obs_connector = OBSConnector(password="OmU3IAuGtlNcUPUY")
 keyboard_connector = KeyboardConnector()
 mouse_connector = MouseConnector()
+smart_comment = SmartCommentBot(topic="BosTioGaming")
 
 
 def _parse_args():
@@ -241,6 +243,31 @@ def on_get_obs_scenes():
     socketio.emit("obs_scenes", obs_connector.get_scene_list())
 
 
+# ── Smart Comment (mental command → komentar acak ke ntfy) ───────────────────
+
+@socketio.on("get_smart_comment_config")
+def on_get_smart_comment_config():
+    socketio.emit("smart_comment_config", {
+        "trigger_command": smart_comment.get_trigger_command(),
+        "commands": sorted(SMART_COMMENT_COMMANDS),
+    })
+
+
+@socketio.on("set_smart_comment_config")
+def on_set_smart_comment_config(data):
+    # "command" absen berarti request malformed. "" / None eksplisit berarti
+    # user sengaja menonaktifkan fitur ini (tidak ada trigger) — sama
+    # semantiknya dengan clear pada Keymap/OBS Keymap.
+    if "command" not in data:
+        return
+    command = (data.get("command") or "").strip()
+    smart_comment.set_trigger_command(command)
+    socketio.emit("smart_comment_config", {
+        "trigger_command": smart_comment.get_trigger_command(),
+        "commands": sorted(SMART_COMMENT_COMMANDS),
+    })
+
+
 @socketio.on("muse_scan")
 def on_muse_scan():
     """Scan BLE devices dan emit hasilnya ke browser."""
@@ -397,6 +424,7 @@ def main():
             socketio.emit("eyebrow_raise", {})
             obs_connector.switch_scene("eyebrow_raise")
             keyboard_connector.press("eyebrow_raise")
+            smart_comment.maybe_send("eyebrow_raise")
 
         def _jaw_clench_cb():
             if muse.cursor_control_enabled:
@@ -411,12 +439,14 @@ def main():
                 socketio.emit("jaw_clench", {})
                 obs_connector.switch_scene("jaw_clench")
                 keyboard_connector.press("jaw_clench")
+                smart_comment.maybe_send("jaw_clench")
 
         def _double_jaw_cb():
             print("🦷🦷  Double jaw detected — triggering overlay")
             socketio.emit("double_jaw", {})
             obs_connector.switch_scene("double_jaw")
             keyboard_connector.press("double_jaw")
+            smart_comment.maybe_send("double_jaw")
 
         def _tilt_left_cb():
             # Defense-in-depth: detector di brainflow_connector.py sudah
@@ -429,6 +459,7 @@ def main():
             socketio.emit("tilt_left", {})
             obs_connector.switch_scene("tilt_left")
             keyboard_connector.press("tilt_left")
+            smart_comment.maybe_send("tilt_left")
 
         def _tilt_right_cb():
             if muse.cursor_control_enabled:
@@ -437,6 +468,7 @@ def main():
             socketio.emit("tilt_right", {})
             obs_connector.switch_scene("tilt_right")
             keyboard_connector.press("tilt_right")
+            smart_comment.maybe_send("tilt_right")
 
         def _tilt_up_cb():
             # Sama arsitekturnya dengan _tilt_left_cb/_tilt_right_cb — axis
@@ -449,6 +481,7 @@ def main():
             socketio.emit("tilt_up", {})
             obs_connector.switch_scene("tilt_up")
             keyboard_connector.press("tilt_up")
+            smart_comment.maybe_send("tilt_up")
 
         def _tilt_down_cb():
             if muse.cursor_control_enabled:
@@ -457,6 +490,7 @@ def main():
             socketio.emit("tilt_down", {})
             obs_connector.switch_scene("tilt_down")
             keyboard_connector.press("tilt_down")
+            smart_comment.maybe_send("tilt_down")
 
         muse = MuseConnector(engine, on_status=_muse_status_cb)
         muse.on_eyebrow_raise = _eyebrow_cb

@@ -274,6 +274,39 @@
   .obs-scene-select:focus { border-color: #00eaff; outline: none; }
   .obs-scene-select option { background: #0a1830; color: #ffffffdd; }
 
+  /* ── Smart Comment panel (mental command → komentar acak ke ntfy, bottom-center) ── */
+  #smart-comment-panel {
+    position: fixed;
+    bottom: 18px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    color: #ffffffaa;
+    background: rgba(0, 8, 25, 0.6);
+    border: 1px solid #ffffff18;
+    border-radius: 4px;
+    padding: 10px 14px;
+    line-height: 1.9;
+  }
+  #smart-comment-panel b { letter-spacing: 0.15em; color: #ffffffcc; }
+  .smart-comment-select {
+    font-family: 'Courier New', monospace;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid #ffffff2a;
+    background: #0a1830;
+    color: #ffffffaa;
+    cursor: pointer;
+    max-width: 150px;
+    transition: all 0.15s;
+  }
+  .smart-comment-select:hover { border-color: #ffffff66; color: #ffffffee; }
+  .smart-comment-select:focus { border-color: #00eaff; outline: none; }
+  .smart-comment-select option { background: #0a1830; color: #ffffffdd; }
+
   /* ── Combo badge (shown inside HUD for combo commands) ── */
   #combo-badge {
     font-size: clamp(0.38rem, 0.6vw, 0.55rem);
@@ -396,6 +429,18 @@
     <span>Tilt Down</span>
     <select class="obs-scene-select" data-command="tilt_down" onchange="setObsSceneMapping(this)"></select>
     <button class="keymap-clear" data-command="tilt_down" title="Clear mapping" onclick="clearObsSceneMapping(this)">✕</button>
+  </div>
+</div>
+
+<!-- Smart Comment panel: pilih 1 mental command sebagai trigger comment
+     acak ke ntfy (lihat eeg_smart_comment.py) -->
+<div id="smart-comment-panel">
+  <div class="keymap-row">
+    <b>SMART COMMENT</b>
+  </div>
+  <div class="keymap-row">
+    <span>Trigger</span>
+    <select class="smart-comment-select" id="smart-comment-trigger" onchange="setSmartCommentTrigger(this)"></select>
   </div>
 </div>
 
@@ -1126,6 +1171,41 @@ socket.on('connect', () => {
   socket.emit('get_obs_keymap');
   socket.emit('get_obs_scenes');
 });
+
+// ── Smart Comment: pilih 1 mental command sebagai trigger ───────────────────
+function _humanizeCommand(command) {
+  return command.split('_').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+}
+
+function _repaintSmartCommentTrigger(config) {
+  const sel = document.getElementById('smart-comment-trigger');
+  const current = config.trigger_command || '';
+  sel.innerHTML = '';
+
+  const optNone = document.createElement('option');
+  optNone.value = '';
+  optNone.textContent = '— (off)';
+  sel.appendChild(optNone);
+
+  for (const command of (config.commands || [])) {
+    const opt = document.createElement('option');
+    opt.value = command;
+    opt.textContent = _humanizeCommand(command);
+    sel.appendChild(opt);
+  }
+
+  sel.value = current;
+}
+
+function setSmartCommentTrigger(selectEl) {
+  socket.emit('set_smart_comment_config', { command: selectEl.value });
+}
+
+socket.on('smart_comment_config', (config) => {
+  _repaintSmartCommentTrigger(config || {});
+});
+
+socket.on('connect', () => socket.emit('get_smart_comment_config'));
 </script>
 </body>
 </html>
