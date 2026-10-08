@@ -129,13 +129,13 @@ CALM_STICK  = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]  # beat 2 & 4
 CALM_KICK   = [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]  # beat 1 saja
 CALM_OHIHAT = [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,0]  # "and" of 4 (aksen lembut)
 
-# FLOW — groove mid-tempo, engaged calm (72-85 BPM)
+# NEUTRAL — groove mid-tempo (72-85 BPM), zona tengah antara calm dan tense
 # Hi-hat 8th seperti calm tapi snare defined di 2&4, kick lebih aktif
 # Jembatan natural antara calm jazz dan tense battle drums
-FLOW_HIHAT  = [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]  # 8th note (sama dengan calm ride rhythm)
-FLOW_SNARE  = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]  # snare solid beat 2 & 4
-FLOW_KICK   = [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0]  # beat 1 + "and" of 2 & 3
-FLOW_OHIHAT = [0,0,0,0, 0,0,0,1, 0,0,0,0, 0,0,0,1]  # open hi-hat "and" of 4 (groove accent)
+NEUTRAL_HIHAT  = [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]  # 8th note (sama dengan calm ride rhythm)
+NEUTRAL_SNARE  = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]  # snare solid beat 2 & 4
+NEUTRAL_KICK   = [1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0]  # beat 1 + "and" of 2 & 3
+NEUTRAL_OHIHAT = [0,0,0,0, 0,0,0,1, 0,0,0,0, 0,0,0,1]  # open hi-hat "and" of 4 (groove accent)
 
 # TENSE — battle drums, relentless (100-130 BPM)
 # 16th hi-hat constant, kick ganda, snare punchy dengan ghost
@@ -298,10 +298,10 @@ class MusicEngine:
     def get_spectrum_position(self) -> float:
         """
         Posisi di spektrum calm←→tense sebagai 0..1.
-        0.0 = murni calm, 0.5 = flow zone, 1.0 = murni tense.
+        0.0 = murni calm, 0.5 = neutral zone, 1.0 = murni tense.
         Diturunkan dari arousal relatif terhadap threshold:
           arousal jauh di bawah threshold → mendekati 0 (calm)
-          arousal di sekitar threshold    → mendekati 0.5 (flow zone)
+          arousal di sekitar threshold    → mendekati 0.5 (neutral zone)
           arousal jauh di atas threshold  → mendekati 1 (tense)
 
         Di-smoothing lewat EMA (alpha=0.15) sebelum dikembalikan — raw arousal
@@ -364,13 +364,13 @@ class MusicEngine:
                     self._adaptive_threshold = round(median + 0.03, 4)
                     print(f"  ⚙  Adaptive threshold → {self._adaptive_threshold:.4f}")
 
-                # Vote buffer — 3-state: calm / flow / tense
-                # spectrum_pos: 0..0.35 = calm, 0.35..0.65 = flow, 0.65..1 = tense
+                # Vote buffer — 3 zona: calm / neutral / tense
+                # spectrum_pos: 0..0.35 = calm, 0.35..0.65 = neutral, 0.65..1 = tense
                 sp = self.get_spectrum_position()
                 if sp > 0.65:
                     raw = "tense"
                 elif sp >= 0.35:
-                    raw = "flow"
+                    raw = "neutral"
                 else:
                     raw = "calm"
                 self._state_votes.append(raw)
@@ -421,24 +421,24 @@ class MusicEngine:
                 vel = int(45 * fade)
                 self._hit(DR["hihat_o"], max(35, vel), 0.08)
 
-        elif state == "flow":
-            # ── FLOW: groove mid-tempo ────────────────────────────────────
+        elif state == "neutral":
+            # ── NEUTRAL: groove mid-tempo ─────────────────────────────────
             fade = min(1.0, (t / 16.0))
 
-            if FLOW_HIHAT[s]:
+            if NEUTRAL_HIHAT[s]:
                 # Aksen di downbeat, lebih soft di offbeat
                 vel = int((72 if s % 8 == 0 else 55) * fade)
                 self._hit(DR["hihat_c"], max(42, vel), 0.03)
 
-            if FLOW_SNARE[s]:
+            if NEUTRAL_SNARE[s]:
                 vel = int(70 * fade)
                 self._hit(DR["snare"], max(48, vel), 0.05)
 
-            if FLOW_KICK[s]:
+            if NEUTRAL_KICK[s]:
                 vel = int(72 * fade)
                 self._hit(DR["kick"], max(48, vel), 0.06)
 
-            if FLOW_OHIHAT[s]:
+            if NEUTRAL_OHIHAT[s]:
                 vel = int(52 * fade)
                 self._hit(DR["hihat_o"], max(38, vel), 0.07)
 
@@ -498,7 +498,7 @@ class MusicEngine:
     def _update_bpm(self, state: str, eeg: EEGState):
         if state == "calm":
             target = 55 + eeg.alpha * 10          # 55–65 BPM
-        elif state == "flow":
+        elif state == "neutral":
             target = 72 + eeg.frontal_alpha * 13  # 72–85 BPM
         else:
             target = 95 + self._tense_level * 40  # 95–135 BPM
@@ -511,15 +511,15 @@ class MusicEngine:
         # Snap 60% BPM ke target baru
         if curr == "tense":
             snap = 95 + self._tense_level * 40
-        elif curr == "flow":
+        elif curr == "neutral":
             snap = 78.0
         else:
             snap = 62.0
         self._bpm += (snap - self._bpm) * 0.60
-        # Update reverb — flow di tengah antara calm dan tense
+        # Update reverb — neutral di tengah antara calm dan tense
         if curr == "calm":
             self.fs.set_reverb(roomsize=0.60, damping=0.55, width=0.8, level=0.45)
-        elif curr == "flow":
+        elif curr == "neutral":
             self.fs.set_reverb(roomsize=0.40, damping=0.65, width=0.65, level=0.35)
         else:
             self.fs.set_reverb(roomsize=0.25, damping=0.75, width=0.5, level=0.25)

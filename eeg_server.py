@@ -288,7 +288,7 @@ def on_muse_scan():
 
 # ── background updater ────────────────────────────────────────────────────────
 
-# Histeresis untuk field "state" (calm/flow/tense) yang di-broadcast ke SEMUA
+# Histeresis untuk field "state" (calm/neutral/tense) yang di-broadcast ke SEMUA
 # overlay lewat state_update — spectrum_pos sendiri sudah EMA-smoothed tapi
 # masih bisa goyang persis di sekitar batas zona (0.35/0.65), jadi tanpa ini
 # label bisa lompat antar-state tiap tick (100ms), terlihat "patah" di
@@ -308,13 +308,13 @@ def _debounced_mental_state(engine) -> str:
     # spectrum_pos is already adaptive-threshold-based and EMA-smoothed
     # (see get_spectrum_position in eeg_engine.py) — using it here instead
     # of eeg.mental_state()'s hardcoded threshold=-0.05 keeps state_update
-    # in sync with the same calm/flow/tense zones the drum engine already
-    # uses, and actually emits "flow" instead of only ever calm/tense.
+    # in sync with the same calm/neutral/tense zones the drum engine already
+    # uses, and actually emits "neutral" instead of only ever calm/tense.
     sp = engine.get_spectrum_position()
     if sp > 0.65:
         candidate = "tense"
     elif sp >= 0.35:
-        candidate = "flow"
+        candidate = "neutral"
     else:
         candidate = "calm"
     if candidate == _stable_state:

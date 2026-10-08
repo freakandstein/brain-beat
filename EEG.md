@@ -4,14 +4,14 @@
 
 | Komponen | Status | Keterangan |
 |---|---|---|
-| **eeg_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, 3-state calm/flow/tense, adaptive threshold (60s warm-up), tense_level build-up, flow_score dari frontal EEG, mute/unmute via MIDI CC7 channel volume |
+| **eeg_engine.py** (BrainBeat) | ✅ Selesai | Drums-only via FluidSynth GM ch9, 3-zone calm/neutral/tense, adaptive threshold (60s warm-up), tense_level build-up, flow_score dari frontal EEG, mute/unmute via MIDI CC7 channel volume |
 | **eeg_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR + eyebrow_raise event |
 | **keyboard_connector.py** | ✅ Selesai | Mapping mental command → keystroke OS via pynput, persist di `keymap.json`, support kombinasi modifier (cmd/ctrl/alt/shift + key), diatur lewat UI capture di overlay |
 | **Mute/unmute instrument** | ✅ Selesai | Button di index.html toggle `set_mute`/`get_mute` socket event — server set channel volume drum ke 0 (mute) / 127 (unmute) tanpa stop synth |
 | **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAINWAVE MONITOR" — single card: state badge, HR, mental command trigger (Scene N by brain signal), spectrum slider, EEG waveforms θ/α/β + Hz display, EEG channel map SVG, status reconnecting |
 | **Overlay FX (overlay_mental_command.html)** | ✅ Selesai | Full-screen visual FX per command — electric arc, scan line, edge glow, auto-hide 2.8s (4s untuk combo), 5 warna berbeda |
 | **Mental Command Playground** | ✅ Selesai | 7 active commands via `/overlay/mental-command` — wink left, wink right, jaw clench, eyebrow raise, double jaw clench, tilt left, tilt right — masing-masing warna berbeda |
-| **State detection** | ✅ Selesai | 3-state calm/flow/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
+| **State detection** | ✅ Selesai | 3-zone calm/neutral/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
 | **EMG rejection** | ✅ Selesai | Two-pass architecture: pre-scan AF7/AF8 frontal EMG, volume conduction blanking ke TP9/TP10 |
 | **Eyebrow raise detection** | ✅ Selesai | Bilateral AF7+AF8 > thr_eyebrow (adaptive, default 300µV) + symmetry check (ratio <3.0) + sustained ≥3 tick, toleran 1 tick noise (reset hanya setelah 2 tick gagal beruntun) + cooldown 3s + eyebrow_zone 1.5s |
 | **Wink left/right detection** | ✅ Selesai | Unilateral: satu sisi AF7/AF8 > thr_wink (adaptive, default 800µV) + asimetri ratio >2.0 + weak side 1–400µV, dibedakan AF7≥AF8 (left) vs AF8>AF7 (right) → `on_wink_left`/`on_wink_right` — Command A1/A2 playground |
@@ -152,15 +152,15 @@ Eyebrow Raise Detection       ← [✅ Impl.] AF7+AF8 keduanya >thr_eyebrow + si
     ↓  Global mutex (_cmd_idle 1.5s)       Semua detector share _last_cmd_time — satu fire → blokir semua, dua arah
 Normalization + EMA           ← [✅ Impl.] Rolling percentile p10–p90 + EMA=0.20
     ↓                                     Juga track raw µV² + spectral centroid Hz untuk display UI
-Mental State Classifier       ← [✅ Impl.] 3-state calm/flow/tense
+Mental State Classifier       ← [✅ Impl.] 3-zone calm/neutral/tense
     ↓                                      arousal index 0.50β−0.30α−0.20TBR
     ↓                                      flow_score = frontal_α + frontal_θ − β (AF7/AF8)
-    ↓                                      spectrum_pos 0..1 → calm (<0.35) / flow (0.35–0.65) / tense (>0.65)
+    ↓                                      spectrum_pos 0..1 → calm (<0.35) / neutral (0.35–0.65) / tense (>0.65)
     ↓                                      Adaptive threshold: warm-up 60s → median+0.03
     ↓                                      Vote buffer 20 tick (70% supermajority)
 BrainBeat Drum Engine         ← [✅ Impl.] FluidSynth GM channel 9 (drums only)
 (eeg_engine.py)                            CALM: brush jazz 55–65 BPM
-    ↓                                      FLOW: groove mid-tempo 72–85 BPM
+    ↓                                      NEUTRAL: groove mid-tempo 72–85 BPM
     ↓                                      TENSE: battle drums 95–135 BPM
     ↓                                      STRESS escalation (tense_level > 0.65): double-time kick
     ↓                                      Musik HANYA aktif saat Muse 2 terhubung
@@ -173,7 +173,7 @@ WebSocket Server              ← [✅ Impl.] Flask-SocketIO, port 8765
     ↓                                      event: eyebrow_raise (SocketIO emit)
     ↓                                      event: get_mute/set_mute/mute_state, get_keymap/set_keymap/keymap
 HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAINWAVE MONITOR" — single card layout:
-(templates/index.html)                     state badge (CALM/FLOW/TENSE) + HR + mental command trigger,
+(templates/index.html)                     state badge (CALM/NEUTRAL/TENSE) + HR + mental command trigger,
     ↓                                      spectrum slider (spectrum_pos 0..1),
     ↓                                      waveform canvas θ/α/β + Hz centroid per band,
     ↓                                      EEG channel map SVG (TP9/AF7/AF8/TP10)

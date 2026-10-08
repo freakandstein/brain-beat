@@ -403,11 +403,11 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 
 **Main Card** — one container with all EEG info:
 
-- **State row (top):** Active state badge (CALM / FLOW / TENSE) with color + description on the left; HR (heart rate from PPG) and mental command trigger on the right
-  - Badge has a continuous breathing animation (scale + opacity); cadence follows state — CALM 3.2s, FLOW 2.2s, TENSE 1.4s
+- **State row (top):** Active state badge (CALM / NEUTRAL / TENSE) with color + description on the left; HR (heart rate from PPG) and mental command trigger on the right
+  - Badge has a continuous breathing animation (scale + opacity); cadence follows state — CALM 3.2s, NEUTRAL 2.2s, TENSE 1.4s
   - Main card background has an ambient mood-lighting glow (radial gradient) tinted to the current state color, transitioning over 1.2s on state change
 - **Mental command trigger:** appears below HR for 2.5 seconds when a brain signal fires — e.g. `Scene 1 by brain signal` (green). Hidden when idle. Also fires a ripple ring expanding outward from the center of the brain map (Channel Map)
-- **Spectrum slider:** CALM ↔ FLOW ZONE ↔ TENSE gradient with cursor tracking `spectrum_pos`
+- **Spectrum slider:** CALM ↔ NEUTRAL ZONE ↔ TENSE gradient with cursor tracking `spectrum_pos`
 - **EEG Channels + Channel Map (side by side):**
   - Left: 3 rolling waveform canvases θ → α → β, colors: theta=green, alpha=blue, beta=purple; Hz centroid label per band
   - Right: SVG top-down brain illustration with TP9/AF7/AF8/TP10 electrode dots overlaid; dot color = signal quality (green/yellow/red/grey). Dots above weak threshold pulse (scale + glow halo) at a rate proportional to signal quality; off/poor electrodes stay static
@@ -442,14 +442,14 @@ Compatible with **OBS Browser Source** (stream overlay).
 
 ### State Detection
 
-3-class system: `calm` / `flow` / `tense`, driven by `spectrum_pos` (0..1).
+3 zones: `calm` / `neutral` / `tense`, driven by `spectrum_pos` (0..1) — a position on a relative-arousal scale (against your own recent baseline), not an absolute mental state.
 
 ```
 arousal    = 0.50 × beta − 0.30 × alpha − 0.20 × TBR
 flow_score = frontal_alpha + frontal_theta − beta   (AF7/AF8 only)
 
-spectrum_pos: 0.0──────0.35──[FLOW ZONE]──0.65──────1.0
-               calm            flow               tense
+spectrum_pos: 0.0──────0.35─[NEUTRAL ZONE]─0.65─────1.0
+               calm          neutral              tense
 ```
 
 State badge dan drum engine keduanya driven oleh `spectrum_pos` — tidak ada divergensi antara UI dan audio.
@@ -464,7 +464,7 @@ State badge dan drum engine keduanya driven oleh `spectrum_pos` — tidak ada di
 
 | From | To | Requirement |
 |---|---|---|
-| any | flow | ≥ 70% flow votes |
+| any | neutral | ≥ 70% neutral votes |
 | any | tense | ≥ 70% tense votes |
 | any | calm | ≥ 70% calm votes |
 
@@ -478,7 +478,7 @@ Kick      : [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]  → beat 1 only
 Open HH   : [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,0]  → "and" of 4 (soft accent)
 ```
 
-**FLOW** — groove mid-tempo, engaged calm (72–85 BPM)
+**NEUTRAL** — groove mid-tempo (72–85 BPM)
 ```
 Hi-Hat c  : [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0]  → 8th note (same rhythm as calm ride)
 Snare     : [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0]  → solid beats 2 & 4
@@ -497,7 +497,7 @@ Open HH : [0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0]  → offbeat accent
 
 **tense_level** is a build-up momentum value (0.0 → 1.0):
 - Increases `+0.006` per tick while tense
-- Decreases `−0.004` per tick while calm or flow
+- Decreases `−0.004` per tick while calm or neutral
 - TENSE BPM: `95 + tense_level × 40` (range 95–135 BPM)
 - When `tense_level > 0.65`: drum pattern intensifies — double-time kick and tom fills kick in
 

@@ -251,7 +251,7 @@ body {
     letter-spacing: 0.08em;
 }
 .spectrum-label.calm  { color: #5eead4; }
-.spectrum-label.flow  { color: #fbbf75; text-align: center; flex: 1; }
+.spectrum-label.neutral { color: #fbbf75; text-align: center; flex: 1; }
 .spectrum-label.tense { color: #e879f9; }
 .spectrum-track {
     position: relative;
@@ -261,7 +261,7 @@ body {
     box-shadow: 0 0 14px -2px #2dd4bf40, inset 0 1px 2px #0008;
     margin-bottom: 6px;
 }
-.spectrum-flow-zone {
+.spectrum-neutral-zone {
     position: absolute;
     top: -3px;
     left: 35%;
@@ -487,16 +487,16 @@ body {
     <div class="spectrum-wrap">
       <div class="spectrum-labels">
         <span class="spectrum-label calm">CALM</span>
-        <span class="spectrum-label flow">⬡ FLOW ZONE</span>
+        <span class="spectrum-label neutral">⬡ NEUTRAL ZONE</span>
         <span class="spectrum-label tense">TENSE</span>
       </div>
       <div class="spectrum-track">
-        <div class="spectrum-flow-zone"></div>
+        <div class="spectrum-neutral-zone"></div>
         <div class="spectrum-cursor" id="spectrum-cursor" style="left:20%"></div>
       </div>
       <div class="spectrum-sublabels">
         <span>relaxed</span>
-        <span>engaged calm</span>
+        <span>near baseline</span>
         <span>aroused</span>
       </div>
     </div>
@@ -725,7 +725,7 @@ socket.on('state_update', (d) => {
   if (sp > 0.65) {
     displayState = 'TENSE'; color = '#e879f9'; desc = 'Tense / Aroused';
   } else if (sp >= 0.35) {
-    displayState = 'FLOW';  color = '#fbbf75'; desc = 'Flow State';
+    displayState = 'NEUTRAL'; color = '#fbbf75'; desc = 'Neutral / Near baseline';
   } else {
     displayState = 'CALM';  color = '#5eead4'; desc = 'Calm / Relaxed';
   }
@@ -733,7 +733,7 @@ socket.on('state_update', (d) => {
   badge.textContent = displayState;
   badge.style.color = color;
   badge.style.textShadow = `0 0 28px ${color}90, 0 0 60px ${color}30`;
-  badge.style.animationDuration = displayState === 'TENSE' ? '1.4s' : displayState === 'FLOW' ? '2.2s' : '3.2s';
+  badge.style.animationDuration = displayState === 'TENSE' ? '1.4s' : displayState === 'NEUTRAL' ? '2.2s' : '3.2s';
   document.getElementById('state-desc').textContent = desc;
   document.querySelector('.main-card').style.setProperty('--mood-glow', color + '22');
 

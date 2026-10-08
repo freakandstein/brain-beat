@@ -52,7 +52,7 @@
   }
 
   #hud .state.calm  { color: #ffffff; }
-  #hud .state.flow  { color: #ffb829; }
+  #hud .state.neutral { color: #ffb829; }
   #hud .state.tense { color: #8052ff; }
 
   #hud .sub {
@@ -256,7 +256,7 @@
       // paint stripes, which is what happened before this used isFleck.
       const n = Math.sin(x * 9.1 + y * 4.7) * 0.5 + 0.5;
       const fleck = isFleck ? '#15846e' : null;
-      if (state === 'flow') {
+      if (state === 'neutral') {
         if (rim > 0.62) return fleck || (n > 0.35 ? '#ffb829' : '#ffffff');
         if (rim > 0.30) return fleck || (n > 0.5 ? '#ffffff' : '#8052ff');
         return fleck || '#8052ff';
@@ -344,10 +344,13 @@
                        spectrum_pos: 0.3 };
     let breathe = 0.6;
 
-    // ?state=calm|flow|tense on the URL locks the display to that state,
+    // ?state=calm|neutral|tense on the URL locks the display to that state,
     // ignoring live updates — handy for previewing a palette in OBS/browser
     // without needing the Muse connected or in that mental state.
-    const forcedState = new URLSearchParams(location.search).get('state');
+    // "flow" is still accepted as an alias for "neutral" (the old name of that
+    // zone) so existing OBS scenes with ?state=flow keep working.
+    const forcedStateParam = new URLSearchParams(location.search).get('state');
+    const forcedState = forcedStateParam === 'flow' ? 'neutral' : forcedStateParam;
 
     const socket = io();
     socket.on('state_update', data => {
