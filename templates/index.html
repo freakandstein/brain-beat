@@ -366,64 +366,15 @@ body {
     flex-shrink: 0;
 }
 
-/* ── Electrode pulse animation ───────────────────────── */
-.eq-glow {
-    transition: fill 0.3s ease, opacity 0.3s ease;
-    transform-origin: center;
+/* ── EEG Channel Map: otak 3D (static/brain3d) ───────── */
+#brain-canvas {
+    width: 190px;
+    height: 155px;
+    display: block;
 }
-.eq-glow.active {
-    animation: eqPulse 1.4s ease-in-out infinite;
-}
-@keyframes eqPulse {
-    0%   { r: 10; opacity: 0.85; }
-    50%  { r: 13; opacity: 1; }
-    100% { r: 10; opacity: 0.85; }
-}
-.eq-halo {
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-}
-.eq-halo.active {
-    opacity: 0.55;
-    animation: haloPulse 1.4s ease-in-out infinite;
-}
-@keyframes haloPulse {
-    0%   { r: 14; opacity: 0.45; }
-    50%  { r: 22; opacity: 0.15; }
-    100% { r: 14; opacity: 0.45; }
-}
-
-/* ── Neural link lines ───────────────────────────────── */
-.eq-link {
-    fill: none;
-    stroke-width: 1.5;
-    stroke-dasharray: 4 5;
-    opacity: 0;
-    transition: opacity 0.4s ease;
-}
-.eq-link.active {
-    opacity: 0.8;
-    animation: linkFlow 0.9s linear infinite;
-}
-@keyframes linkFlow {
-    to { stroke-dashoffset: -18; }
-}
-
-/* ── Ripple from brain map ───────────────────────────── */
-.eq-ripple {
-    fill: none;
-    stroke: #5eead4;
-    stroke-width: 2;
-    opacity: 0;
-    pointer-events: none;
-}
-.eq-ripple.firing {
-    animation: ripplePulse 0.9s ease-out;
-}
-@keyframes ripplePulse {
-    0%   { r: 10;  opacity: 0.9;  stroke-width: 2.5; }
-    100% { r: 95;  opacity: 0;    stroke-width: 0.5; }
+.head-legend i.ring {
+    background: transparent;
+    box-shadow: inset 0 0 0 2px #fb7185;
 }
 
 .bci-device-item {
@@ -536,66 +487,11 @@ body {
       <!-- EEG Channel Map -->
       <div class="map-col">
         <span class="sq-label">EEG CHANNEL MAP</span>
-        <svg viewBox="0 0 200 210" width="120" height="126">
-          <defs>
-            <filter id="eq-blur" x="-100%" y="-100%" width="300%" height="300%">
-              <feGaussianBlur stdDeviation="4"/>
-            </filter>
-          </defs>
-
-          <!-- Brain illustration (top-down view) -->
-          <g id="brain-illustration" fill="#0c211d" stroke="#164039" stroke-width="1.2" stroke-linejoin="round">
-            <path d="M100,24
-                     C123,24 138,33 146,46
-                     C156,44 168,52 169,64
-                     C178,68 183,78 178,88
-                     C186,94 186,106 178,112
-                     C186,120 184,132 174,136
-                     C176,148 168,158 156,158
-                     C152,170 140,178 126,176
-                     C118,186 108,190 100,190
-                     C92,190 82,186 74,176
-                     C60,178 48,170 44,158
-                     C32,158 24,148 26,136
-                     C16,132 14,120 22,112
-                     C14,106 14,94 22,88
-                     C17,78 22,68 31,64
-                     C32,52 44,44 54,46
-                     C62,33 77,24 100,24 Z"/>
-            <path d="M100,30 C100,50 100,70 100,190" fill="none" stroke-width="1" opacity="0.7"/>
-            <path d="M70,40 C66,60 64,82 70,100 C64,118 64,140 72,158" fill="none" stroke-width="0.8" opacity="0.5"/>
-            <path d="M130,40 C134,60 136,82 130,100 C136,118 136,140 128,158" fill="none" stroke-width="0.8" opacity="0.5"/>
-            <path d="M44,90 C56,86 68,90 76,98" fill="none" stroke-width="0.7" opacity="0.4"/>
-            <path d="M156,90 C144,86 132,90 124,98" fill="none" stroke-width="0.7" opacity="0.4"/>
-            <path d="M40,124 C54,120 66,124 74,132" fill="none" stroke-width="0.7" opacity="0.4"/>
-            <path d="M160,124 C146,120 134,124 126,132" fill="none" stroke-width="0.7" opacity="0.4"/>
-          </g>
-
-          <!-- Neural link lines (lit when both sides of a pair are active) -->
-          <path id="link-frontal" class="eq-link" stroke="#5eead4" d="M64,56 Q100,44 136,56"/>
-          <path id="link-temporal" class="eq-link" stroke="#5eead4" d="M21,112 Q100,128 179,112"/>
-
-          <!-- Ripple ring fired on mental command detection -->
-          <circle id="eq-ripple" class="eq-ripple" cx="100" cy="106" r="10"/>
-
-          <circle id="halo-AF7" class="eq-halo" cx="64" cy="56" r="14" fill="#5eead4" filter="url(#eq-blur)"/>
-          <circle id="halo-AF8" class="eq-halo" cx="136" cy="56" r="14" fill="#5eead4" filter="url(#eq-blur)"/>
-          <circle id="halo-TP9" class="eq-halo" cx="21" cy="112" r="14" fill="#5eead4" filter="url(#eq-blur)"/>
-          <circle id="halo-TP10" class="eq-halo" cx="179" cy="112" r="14" fill="#5eead4" filter="url(#eq-blur)"/>
-
-          <circle id="eq-AF7" class="eq-glow" cx="64" cy="56" r="10" fill="#1c3b35" stroke="#04241f" stroke-width="1.5"/>
-          <text x="64" y="60" text-anchor="middle" font-size="7.5" fill="#7fb3a8" font-family="monospace">AF7</text>
-          <circle id="eq-AF8" class="eq-glow" cx="136" cy="56" r="10" fill="#1c3b35" stroke="#04241f" stroke-width="1.5"/>
-          <text x="136" y="60" text-anchor="middle" font-size="7.5" fill="#7fb3a8" font-family="monospace">AF8</text>
-          <circle id="eq-TP9" class="eq-glow" cx="21" cy="112" r="10" fill="#1c3b35" stroke="#04241f" stroke-width="1.5"/>
-          <text x="21" y="116" text-anchor="middle" font-size="7.5" fill="#7fb3a8" font-family="monospace">TP9</text>
-          <circle id="eq-TP10" class="eq-glow" cx="179" cy="112" r="10" fill="#1c3b35" stroke="#04241f" stroke-width="1.5"/>
-          <text x="179" y="116" text-anchor="middle" font-size="7.5" fill="#7fb3a8" font-family="monospace">TP10</text>
-        </svg>
+        <canvas id="brain-canvas" width="190" height="155" aria-label="EEG channel map: 3D brain with the four Muse electrodes"></canvas>
         <div class="head-legend">
           <span><i style="background:#5eead4"></i>Good</span>
           <span><i style="background:#fbbf75"></i>Weak</span>
-          <span><i style="background:#fb7185"></i>Poor</span>
+          <span><i class="ring"></i>Poor</span>
           <span><i style="background:#1c3b35"></i>Off</span>
         </div>
       </div>
@@ -763,37 +659,13 @@ socket.on('state_update', (d) => {
   updateHeadDiagram(d.channel_quality, d.muse === 'connected');
 });
 
-// ── EEG Head Diagram ──────────────────────────────────────────────────────
+// ── EEG Head Diagram: otak 3D (static/brain3d/brain-view.js) ──────────────
+// Level tiap elektroda dihitung di brain-view.js (sensorLevels: good >= 0.7, weak >= 0.35, poor; off tanpa koneksi).
+// state_update bisa datang sebelum modul selesai dimuat, jadi nilai terakhir disimpan dan dipasang begitu view siap.
+let _lastContact = { quality: null, connected: false };
 function updateHeadDiagram(quality, connected) {
-  const active = {};
-  ['AF7', 'AF8', 'TP9', 'TP10'].forEach(name => {
-    const el   = document.getElementById('eq-' + name);
-    const halo = document.getElementById('halo-' + name);
-    if (!el) return;
-    if (!connected || quality === null) {
-      el.setAttribute('fill', '#1c3b35');
-      el.classList.remove('active');
-      if (halo) halo.classList.remove('active');
-      active[name] = false;
-      return;
-    }
-    const q = quality[name] ?? 0;
-    const color = q >= 0.7 ? '#5eead4' : q >= 0.35 ? '#fbbf75' : '#fb7185';
-    el.setAttribute('fill', color);
-    el.classList.toggle('active', q >= 0.35);
-    if (halo) {
-      halo.setAttribute('fill', color);
-      halo.classList.toggle('active', q >= 0.35);
-      halo.style.animationDuration = (1.6 - q * 0.7) + 's';
-    }
-    el.style.animationDuration = (1.6 - q * 0.7) + 's';
-    active[name] = q >= 0.35;
-  });
-
-  const frontalLink  = document.getElementById('link-frontal');
-  const temporalLink = document.getElementById('link-temporal');
-  if (frontalLink)  frontalLink.classList.toggle('active', active.AF7 && active.AF8);
-  if (temporalLink) temporalLink.classList.toggle('active', active.TP9 && active.TP10);
+  _lastContact = { quality, connected };
+  if (window.brainView) window.brainView.setContact(quality, connected);
 }
 
 // ── Muse 2 ────────────────────────────────────────────────────────────────
@@ -887,12 +759,7 @@ function triggerMental(event) {
 }
 
 function fireRipple() {
-  const ripple = document.getElementById('eq-ripple');
-  if (!ripple) return;
-  ripple.classList.remove('firing');
-  // restart animation
-  void ripple.offsetWidth;
-  ripple.classList.add('firing');
+  if (window.brainView) window.brainView.pulse();
 }
 
 socket.on('jaw_clench',    () => triggerMental('jaw_clench'));
@@ -978,6 +845,11 @@ document.addEventListener('DOMContentLoaded', () => {
   waves.alpha = new Waveform('alpha-wave', '#7dd3fc');
   waves.beta  = new Waveform('beta-wave',  '#e879f9');
 });
+</script>
+<script type="module">
+  import { createBrainView } from '/static/brain3d/brain-view.js';
+  window.brainView = createBrainView(document.getElementById('brain-canvas'));
+  window.brainView.setContact(_lastContact.quality, _lastContact.connected);
 </script>
 </body>
 </html>

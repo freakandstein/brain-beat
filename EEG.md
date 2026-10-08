@@ -8,7 +8,7 @@
 | **eeg_server.py** | ✅ Selesai | Flask + SocketIO, port 8765, emit state + arousal/threshold/confidence/consistency/warming_up + raw µV² + HR + eyebrow_raise event |
 | **keyboard_connector.py** | ✅ Selesai | Mapping mental command → keystroke OS via pynput, persist di `keymap.json`, support kombinasi modifier (cmd/ctrl/alt/shift + key), diatur lewat UI capture di overlay |
 | **Mute/unmute instrument** | ✅ Selesai | Button di index.html toggle `set_mute`/`get_mute` socket event — server set channel volume drum ke 0 (mute) / 127 (unmute) tanpa stop synth |
-| **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAINWAVE MONITOR" — single card: state badge, HR, mental command trigger (Scene N by brain signal), spectrum slider, EEG waveforms θ/α/β + Hz display, EEG channel map SVG, status reconnecting |
+| **Web UI (index.html)** | ✅ Selesai | OBS overlay "BRAINWAVE MONITOR" — single card: state badge, HR, mental command trigger (Scene N by brain signal), spectrum slider, EEG waveforms θ/α/β + Hz display, EEG channel map (3D brain berputar), status reconnecting |
 | **Overlay FX (overlay_mental_command.html)** | ✅ Selesai | Full-screen visual FX per command — electric arc, scan line, edge glow, auto-hide 2.8s (4s untuk combo), 5 warna berbeda |
 | **Mental Command Playground** | ✅ Selesai | 7 active commands via `/overlay/mental-command` — wink left, wink right, jaw clench, eyebrow raise, double jaw clench, tilt left, tilt right — masing-masing warna berbeda |
 | **State detection** | ✅ Selesai | 3-zone calm/neutral/tense — arousal index + flow_score (frontal α+θ−β) + spectrum_pos 0..1 + adaptive threshold (warm-up 60s) + vote buffer 20 tick (70% supermajority) |
@@ -176,7 +176,7 @@ HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAINWAVE MONITOR" — single car
 (templates/index.html)                     state badge (CALM/NEUTRAL/TENSE) + HR + mental command trigger,
     ↓                                      spectrum slider (spectrum_pos 0..1),
     ↓                                      waveform canvas θ/α/β + Hz centroid per band,
-    ↓                                      EEG channel map SVG (TP9/AF7/AF8/TP10)
+    ↓                                      EEG channel map: 3D brain berputar (TP9/AF7/AF8/TP10)
     ↓                                      status: connecting / reconnecting / connected / error
 Overlay FX                    ← [✅ Impl.] templates/overlay_mental_command.html — http://localhost:8765/overlay/mental-command
 (templates/overlay_mental_command.html)                   Triggered by wink_left / wink_right / jaw_clench / eyebrow_raise / double_jaw events via SocketIO

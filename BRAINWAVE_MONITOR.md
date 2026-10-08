@@ -20,6 +20,7 @@ Muse 2 (via muselsl + pylsl) / Simulator
         │           mouse_connector.py  ← Cursor movement/click via pynput.mouse (60Hz mover thread)
         │
   templates/index.html         ← Web UI "BRAINWAVE MONITOR" (OBS overlay) + Cursor Control toggle
+  static/brain3d/              ← rotating 3D brain for the EEG Channel Map (ported from TypeWave; tests in tests/js)
   templates/overlay_mental_command.html ← 5-command mental command overlay (/overlay/mental-command)
 ```
 
@@ -406,12 +407,12 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - **State row (top):** Active state badge (CALM / NEUTRAL / TENSE) with color + description on the left; HR (heart rate from PPG) and mental command trigger on the right
   - Badge has a continuous breathing animation (scale + opacity); cadence follows state — CALM 3.2s, NEUTRAL 2.2s, TENSE 1.4s
   - Main card background has an ambient mood-lighting glow (radial gradient) tinted to the current state color, transitioning over 1.2s on state change
-- **Mental command trigger:** appears below HR for 2.5 seconds when a brain signal fires — e.g. `Scene 1 by brain signal` (green). Hidden when idle. Also fires a ripple ring expanding outward from the center of the brain map (Channel Map)
+- **Mental command trigger:** appears below HR for 2.5 seconds when a brain signal fires — e.g. `Scene 1 by brain signal` (green). Hidden when idle. Also fires a ripple on the brain map (Channel Map): the brain's lines flash briefly and a ring expands outward from its center
 - **Spectrum slider:** CALM ↔ NEUTRAL ZONE ↔ TENSE gradient with cursor tracking `spectrum_pos`
 - **EEG Channels + Channel Map (side by side):**
   - Left: 3 rolling waveform canvases θ → α → β, colors: theta=green, alpha=blue, beta=purple; Hz centroid label per band
-  - Right: SVG top-down brain illustration with TP9/AF7/AF8/TP10 electrode dots overlaid; dot color = signal quality (green/yellow/red/grey). Dots above weak threshold pulse (scale + glow halo) at a rate proportional to signal quality; off/poor electrodes stay static
-  - Neural link line: a dashed arc connects AF7↔AF8 and another connects TP9↔TP10; each arc lights up and animates (flowing dash) only when both electrodes in that pair are simultaneously above the weak-signal threshold
+  - Right: a slowly rotating 3D brain drawn from thin lines (`static/brain3d/`, ported from TypeWave; about 20 s per turn, lines farther away fade) with the TP9/AF7/AF8/TP10 electrodes as dots on its surface. Dot = signal quality: Good (≥ 0.7) green, Weak (≥ 0.35) yellow, Poor red ring, Off dark when the Muse is not connected (the brain also dims). Channel labels are shown only for dots on the near side, because the brain rotates
+  - Dot positions are approximate (the surface fold nearest to each sensor's direction), not anatomically exact. It is a contact indicator, not a map of brain activity
 
 **BCI Device Panel** (below main card)
 - Muse 2 connection status, scan + connect/disconnect buttons
