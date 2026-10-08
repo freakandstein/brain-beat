@@ -292,9 +292,9 @@ The weak-channel boundary (1–400µV) is the key separator between wink and eye
 - Command A2 (Wink Right): pink
 - Command B (Jaw Clench): orange  
 - Command C (Eyebrow Raise): green
-- Command D (Double Jaw Clench): amber, with a "COMBO SEQUENCE" badge and longer 4s hold
+- Command D (Double Jaw Clench): amber, with a longer 4s hold
 - Command E (Tilt Left): violet (hue 258) — deliberately a new hue family, distinct from every EMG command, and shows no active channel node (it isn't EEG)
-- Command F (Tilt Right): indigo (hue 272) — same rationale as Tilt Left; readout "Power" is labeled in `mg` (milli-g, accelerometer units) instead of `µV`, since it isn't an EMG signal
+- Command F (Tilt Right): indigo (hue 272) — same rationale as Tilt Left
 
 Dev test: **Shift+1** through **Shift+7**. Single commands auto-hide after 2.8 seconds; double jaw holds for 4 seconds.
 

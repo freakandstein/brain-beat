@@ -201,7 +201,7 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 
 **Mental Command Playground** (`http://localhost:8765/overlay/mental-command`):
 - Full-screen command demo overlay with 5 distinct color schemes per command
-- Command A1 (Wink Left) — cyan, Command A2 (Wink Right) — pink, Command B (Jaw Clench) — orange, Command C (Eyebrow Raise) — green, Command D (Double Jaw Clench) — amber, combo badge
+- Command A1 (Wink Left) — cyan, Command A2 (Wink Right) — pink, Command B (Jaw Clench) — orange, Command C (Eyebrow Raise) — green, Command D (Double Jaw Clench) — amber
 - Dev test: **Shift+1** through **Shift+5** to trigger each command without Muse
 
 ---

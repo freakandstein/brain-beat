@@ -28,142 +28,6 @@
     height: 100%;
   }
 
-  /* ── HUD center block ── */
-  #hud-center {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-    opacity: 0;
-    transform: scale(0.96) translateY(8px);
-    transition: opacity 0.22s ease-out, transform 0.22s ease-out;
-  }
-
-  #text-label {
-    font-size: clamp(0.55rem, 0.9vw, 0.85rem);
-    letter-spacing: 0.38em;
-    text-transform: uppercase;
-    color: var(--accent-dim, #00eaff55);
-    margin-bottom: 0.4em;
-  }
-
-  #text-main {
-    font-size: clamp(1.5rem, 5vw, 5.5rem);
-    font-weight: 900;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    white-space: nowrap;
-    color: #ffffff;
-    background: rgba(0, 5, 20, 0.78);
-    padding: 0.18em 0.7em;
-    border-left: 2px solid var(--accent, #00eaff88);
-    border-right: 2px solid var(--accent, #00eaff88);
-    text-shadow:
-      0 0 4px  #ffffff,
-      0 0 14px var(--glow, #00eaff),
-      0 0 32px var(--glow, #00aaff),
-      0 0 60px var(--glow, #0077ffcc),
-      0 0 100px var(--glow, #0044ff88);
-    -webkit-text-stroke: 0.5px var(--accent, #00eaff);
-  }
-
-  #text-sub {
-    font-size: clamp(0.5rem, 0.8vw, 0.75rem);
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
-    color: var(--accent-dim, #00eaff55);
-    margin-top: 0.45em;
-  }
-
-  /* ── Data readout strips ── */
-  #readout-row {
-    display: flex;
-    gap: 2em;
-    margin-top: 1.2em;
-    opacity: 0;
-    transform: translateY(4px);
-    transition: opacity 0.3s 0.15s ease-out, transform 0.3s 0.15s ease-out;
-  }
-
-  .readout-block {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.18em;
-  }
-
-  .readout-key {
-    font-size: clamp(0.4rem, 0.6vw, 0.58rem);
-    letter-spacing: 0.25em;
-    color: var(--accent-dim, #00eaff44);
-    text-transform: uppercase;
-  }
-
-  .readout-val {
-    font-size: clamp(0.6rem, 1vw, 0.95rem);
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    color: var(--accent, #00eaff);
-    text-shadow: 0 0 8px var(--glow, #00aaff);
-  }
-
-  .readout-bar {
-    width: clamp(50px, 5vw, 80px);
-    height: 3px;
-    background: rgba(255,255,255,0.08);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-
-  .readout-fill {
-    height: 100%;
-    background: var(--accent, #00eaff);
-    box-shadow: 0 0 6px var(--glow, #00aaff);
-    width: 0%;
-    transition: width 0.5s 0.2s ease-out;
-  }
-
-  /* ── Signal quality strip (top-right HUD) ── */
-  #sig-hud {
-    position: fixed;
-    top: 18px;
-    right: 18px;
-    font-size: 0.62rem;
-    letter-spacing: 0.12em;
-    color: #ffffffaa;
-    background: rgba(0, 8, 25, 0.6);
-    border: 1px solid #ffffff18;
-    border-radius: 4px;
-    padding: 8px 12px;
-    line-height: 1.9;
-    text-transform: uppercase;
-    opacity: 0;
-    transform: translateX(8px);
-    transition: opacity 0.3s ease-out, transform 0.3s ease-out;
-  }
-
-  .sig-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5em;
-  }
-
-  .sig-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: #ffffff33;
-    flex-shrink: 0;
-    transition: background 0.2s, box-shadow 0.2s;
-  }
-
-  .sig-dot.on {
-    background: var(--accent, #00eaff);
-    box-shadow: 0 0 6px var(--glow, #00aaff);
-  }
-
   /* ── Command legend (dev aid, top-left) ── */
   #legend {
     position: fixed;
@@ -307,31 +171,10 @@
   .smart-comment-select:focus { border-color: #00eaff; outline: none; }
   .smart-comment-select option { background: #0a1830; color: #ffffffdd; }
 
-  /* ── Combo badge (shown inside HUD for combo commands) ── */
-  #combo-badge {
-    font-size: clamp(0.38rem, 0.6vw, 0.55rem);
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
-    color: var(--accent, #00eaff);
-    background: rgba(0,0,0,0.45);
-    border: 1px solid var(--accent-dim, #00eaff44);
-    border-radius: 3px;
-    padding: 0.18em 0.8em;
-    margin-bottom: 0.5em;
-    opacity: 0;
-    transition: opacity 0.2s;
-  }
-  #combo-badge.show { opacity: 1; }
-
   /* ── Active state ── */
   #overlay.active { opacity: 1; }
-  #overlay.active #hud-center  { opacity: 1; transform: scale(1) translateY(0); }
-  #overlay.active #readout-row { opacity: 1; transform: translateY(0); }
-  #overlay.active .readout-fill { /* width set by JS */ }
-  #overlay.active ~ #sig-hud   { opacity: 1; transform: translateX(0); }
 
   #overlay.fadeout { transition: opacity 1.2s ease-in; opacity: 0; }
-  #overlay.fadeout ~ #sig-hud { transition: opacity 1.2s ease-in; opacity: 0; }
 </style>
 </head>
 <body>
@@ -444,41 +287,8 @@
   </div>
 </div>
 
-<!-- Signal HUD (top-right) -->
-<div id="sig-hud">
-  <div class="sig-row"><span class="sig-dot on" id="dot-af7"></span> AF7</div>
-  <div class="sig-row"><span class="sig-dot on" id="dot-af8"></span> AF8</div>
-  <div class="sig-row"><span class="sig-dot on" id="dot-tp9"></span> TP9</div>
-  <div class="sig-row"><span class="sig-dot on" id="dot-tp10"></span> TP10</div>
-</div>
-
 <div id="overlay">
   <canvas id="fx-canvas"></canvas>
-
-  <div id="hud-center">
-    <span id="combo-badge">COMBO</span>
-    <span id="text-label">EEG · AF7 / AF8</span>
-    <span id="text-main">COMMAND</span>
-    <span id="text-sub">detail</span>
-
-    <div id="readout-row">
-      <div class="readout-block">
-        <span class="readout-key">Confidence</span>
-        <span class="readout-val" id="rd-conf">--%</span>
-        <div class="readout-bar"><div class="readout-fill" id="rf-conf"></div></div>
-      </div>
-      <div class="readout-block">
-        <span class="readout-key">Latency</span>
-        <span class="readout-val" id="rd-lat">--ms</span>
-        <div class="readout-bar"><div class="readout-fill" id="rf-lat"></div></div>
-      </div>
-      <div class="readout-block">
-        <span class="readout-key">Power</span>
-        <span class="readout-val" id="rd-pow">--μV</span>
-        <div class="readout-bar"><div class="readout-fill" id="rf-pow"></div></div>
-      </div>
-    </div>
-  </div>
 </div>
 
 <script src="/static/socket.io.min.js"></script>
@@ -824,40 +634,6 @@ function stopFx() {
   phaseT   = 0;
 }
 
-// ── Readout animation ─────────────────────────────────────────────────────────
-let readoutTimer = null;
-
-function animateReadout(conf, lat, pow, powUnit) {
-  powUnit = powUnit || 'μV';
-  clearTimeout(readoutTimer);
-  document.getElementById('rd-conf').textContent = '---%';
-  document.getElementById('rd-lat').textContent  = '---ms';
-  document.getElementById('rd-pow').textContent  = '---' + powUnit;
-  document.getElementById('rf-conf').style.width = '0%';
-  document.getElementById('rf-lat').style.width  = '0%';
-  document.getElementById('rf-pow').style.width  = '0%';
-
-  readoutTimer = setTimeout(() => {
-    document.getElementById('rd-conf').textContent = conf + '%';
-    document.getElementById('rd-lat').textContent  = lat + 'ms';
-    document.getElementById('rd-pow').textContent  = pow + powUnit;
-    document.getElementById('rf-conf').style.width = conf + '%';
-    document.getElementById('rf-lat').style.width  = Math.round(100 - lat) + '%';
-    document.getElementById('rf-pow').style.width  = Math.min(100, Math.round(pow * 1.5)) + '%';
-  }, 180);
-}
-
-// ── Signal HUD dots ───────────────────────────────────────────────────────────
-function setActiveDots(channels) {
-  for (const id of ['dot-af7','dot-af8','dot-tp9','dot-tp10']) {
-    document.getElementById(id).classList.remove('on');
-  }
-  if (channels.includes('AF7'))  document.getElementById('dot-af7').classList.add('on');
-  if (channels.includes('AF8'))  document.getElementById('dot-af8').classList.add('on');
-  if (channels.includes('TP9'))  document.getElementById('dot-tp9').classList.add('on');
-  if (channels.includes('TP10')) document.getElementById('dot-tp10').classList.add('on');
-}
-
 // ── Command profiles ──────────────────────────────────────────────────────────
 const COMMANDS = {
   // ── Single commands ──
@@ -929,12 +705,7 @@ const COMMANDS = {
 
 // ── Overlay trigger ───────────────────────────────────────────────────────────
 const overlay    = document.getElementById('overlay');
-const sigHud     = document.getElementById('sig-hud');
 const root       = document.documentElement;
-const elLabel    = document.getElementById('text-label');
-const elMain     = document.getElementById('text-main');
-const elSub      = document.getElementById('text-sub');
-const elComboBadge = document.getElementById('combo-badge');
 let hideTimer = null;
 let fadeTimer = null;
 
@@ -942,48 +713,22 @@ function triggerOverlay(commandKey) {
   const cmd = COMMANDS[commandKey];
   if (!cmd) return;
 
+  // Hanya efek visual (partikel/glow per command); tanpa teks, readout, atau HUD kanal.
   root.style.setProperty('--accent',     cmd.accent);
   root.style.setProperty('--accent-dim', cmd.accentDim);
   root.style.setProperty('--glow',       cmd.glow);
-  elLabel.textContent = cmd.label;
-  elMain.textContent  = cmd.main;
-  elSub.textContent   = cmd.sub;
-
-  // Combo badge — tampil hanya untuk combo commands
-  if (cmd.combo) {
-    elComboBadge.textContent = '⚡ COMBO SEQUENCE';
-    elComboBadge.classList.add('show');
-  } else {
-    elComboBadge.classList.remove('show');
-  }
-
-  // randomise readout values slightly for realism
-  const jitter = n => n + Math.round((Math.random() - 0.5) * 6);
-  animateReadout(jitter(cmd.conf), jitter(cmd.lat), jitter(cmd.pow), cmd.powUnit);
-  setActiveDots(cmd.channels);
 
   clearTimeout(hideTimer);
   clearTimeout(fadeTimer);
   overlay.classList.remove('fadeout');
   overlay.classList.add('active');
-  sigHud.style.opacity  = '1';
-  sigHud.style.transform = 'translateX(0)';
   startFx(cmd.hue, cmd.channels);
 
-  // Combo hold lebih lama (4s) supaya teks sempat dibaca
   const holdMs = cmd.combo ? 4000 : 3000;
   hideTimer = setTimeout(() => {
     stopFx();
     overlay.classList.add('fadeout');
-    sigHud.style.transition = 'opacity 1.2s ease-in';
-    sigHud.style.opacity    = '0';
-    fadeTimer = setTimeout(() => {
-      overlay.classList.remove('active', 'fadeout');
-      elComboBadge.classList.remove('show');
-      sigHud.style.transition = '';
-      sigHud.style.opacity    = '0';
-      sigHud.style.transform  = 'translateX(8px)';
-    }, 1300);
+    fadeTimer = setTimeout(() => overlay.classList.remove('active', 'fadeout'), 1300);
   }, holdMs);
 }
 

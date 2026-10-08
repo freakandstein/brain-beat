@@ -181,7 +181,7 @@ HTML/CSS/JS Overlay           ← [✅ Impl.] "BRAINWAVE MONITOR" — single car
 Overlay FX                    ← [✅ Impl.] templates/overlay_mental_command.html — http://localhost:8765/overlay/mental-command
 (templates/overlay_mental_command.html)                   Triggered by wink_left / wink_right / jaw_clench / eyebrow_raise / double_jaw events via SocketIO
     ↓                                      Visual: electric arc + scan line + edge glow + center text
-    ↓                                      Auto-hide setelah 2.8s (4s untuk double_jaw + combo badge), fade-out 1.4s
+    ↓                                      Auto-hide setelah 2.8s (4s untuk double_jaw), fade-out 1.4s
 OBS Browser Source            ← index.html: monitor overlay (port 8765)
                                  overlay_mental_command.html: mental command overlay (/overlay/mental-command)
 ```

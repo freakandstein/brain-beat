@@ -87,22 +87,6 @@
 
   #readout .row { margin-bottom: 4px; }
   #readout .row b { font-weight: 600; color: #ffffff; }
-
-  #warmup {
-    position: fixed;
-    bottom: 40px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 20;
-    font-weight: 200;
-    font-size: 14px;
-    letter-spacing: 0.025em;
-    text-transform: uppercase;
-    color: #9a9a9a;
-    transition: opacity 0.8s ease;
-    pointer-events: none;
-  }
-  #warmup.hidden { opacity: 0; }
 </style>
 </head>
 <body>
@@ -124,7 +108,6 @@
     <div class="row">THETA <b id="r-theta">—</b></div>
   </div>
 
-  <div id="warmup">awaiting signal…</div>
 
   <script src="/static/socket.io.min.js"></script>
   <script>
@@ -370,17 +353,6 @@
       document.getElementById('r-alpha').textContent = data.alpha != null ? data.alpha.toFixed(2) : '—';
       document.getElementById('r-beta').textContent = data.beta != null ? data.beta.toFixed(2) : '—';
       document.getElementById('r-theta').textContent = data.theta != null ? data.theta.toFixed(2) : '—';
-
-      const warmup = document.getElementById('warmup');
-      if (!data.eeg_active) {
-        warmup.textContent = 'awaiting signal…';
-        warmup.classList.remove('hidden');
-      } else if (data.warming_up) {
-        warmup.textContent = 'calibrating…';
-        warmup.classList.remove('hidden');
-      } else {
-        warmup.classList.add('hidden');
-      }
     });
 
     // gesture spark bursts — amber punctuation echoing Dala's Saffron Spark
