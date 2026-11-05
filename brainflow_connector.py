@@ -181,6 +181,72 @@ class GestureComposer:
         self._jaw_count = 0
 
 
+class DetectorTickLog:
+    """
+    Log diagnostik per-tick untuk detektor eyebrow/jaw → eeg_detector_*.csv.
+
+    Kenapa terpisah dari CSV sesi: CSV sesi ditulis tiap 7 tick dan _cmd_diag
+    direset tiap tick, jadi `cmd_fired` cuma menangkap ~1 dari 7 fire, dan
+    threshold/amplitudo eyebrow hanya muncul di terminal. Log ini merekam
+    SETIAP tick, supaya kejadian "eyebrow susah / ketrigger sendiri" bisa
+    dibaca angkanya (p2p vs threshold) dari file.
+
+    Murni observasi: kegagalan membuka/menulis TIDAK PERNAH di-raise — log
+    mati sendiri dan loop deteksi jalan terus seperti biasa.
+    """
+
+    COLUMNS = [
+        'time', 'elapsed_s', 'tick',
+        'std_tp9', 'std_af7', 'std_af8', 'std_tp10',   # std mentah window 2 s (dasar q_*)
+        'q_af7', 'q_af8',
+        'p2p_af7', 'p2p_af8',                          # amplitudo yang dibandingkan ke thr_eyebrow
+        'thr_eyebrow', 'calib_done',
+        'both_strong', 'bilateral', 'streak', 'miss',  # streak/miss: sebelum di-reset oleh fire
+        'eb_blocked_jaw', 'eb_fired',
+        'jaw_tp9', 'jaw_tp10', 'thr_jaw',
+    ]
+
+    def __init__(self, path: str):
+        self._file = None
+        self._w = None
+        try:
+            self._file = open(path, 'w', newline='')
+            self._w = csv.writer(self._file)
+            self._w.writerow(self.COLUMNS)
+            self._file.flush()
+        except Exception as e:
+            print(f"⚠️  Log detektor per-tick dimatikan ({path}): {e}")
+            self._disable()
+
+    def write(self, **fields) -> None:
+        """Satu baris per tick; field dipetakan lewat nama kolom, yang tidak diisi dikosongkan."""
+        if self._w is None:
+            return
+        try:
+            self._w.writerow([fields.get(c, '') for c in self.COLUMNS])
+            self._file.flush()
+        except Exception as e:
+            print(f"⚠️  Log detektor per-tick dimatikan: {e}")
+            self._disable()
+
+    def close(self) -> None:
+        if self._file is not None:
+            try:
+                self._file.close()
+            except Exception:
+                pass
+        self._disable()
+
+    def _disable(self) -> None:
+        self._w = None
+        if self._file is not None:
+            try:
+                self._file.close()
+            except Exception:
+                pass
+        self._file = None
+
+
 class MuseConnector:
     """
     Thread-safe Muse 2 connector.
@@ -1008,6 +1074,12 @@ class MuseConnector:
         _t0 = time.time()
         print(f"📊  Logging EEG ke {_csv_path}")
 
+        # Log per-tick detektor eyebrow/jaw — berpasangan dengan CSV sesi
+        # (stempel waktu sama). Lihat DetectorTickLog.
+        _det_path = _csv_path.replace('eeg_session_', 'eeg_detector_', 1)
+        _det_log  = DetectorTickLog(_det_path)
+        print(f"📊  Logging detektor per-tick ke {_det_path}")
+
         # Diagnostik command playground — direset tiap tick, diisi detector,
         # ditulis ke CSV supaya bisa dianalisa offline dari file log session.
         _cmd_diag = {
@@ -1084,8 +1156,10 @@ class MuseConnector:
 
                 # ── Channel quality (dihitung DULU sebelum band power) ────
                 ch_quality = []
+                ch_std = []   # std mentah per channel — dicatat ke log detektor per-tick
                 for i, name in enumerate(["TP9", "AF7", "AF8", "TP10"]):
                     std = float(np.std(eeg_win[i]))
+                    ch_std.append(std)
                     if std < 3.0 or std > 400.0:  q = 0.0    # flat atau extreme noise
                     elif std > 300.0:              q = 0.25   # sangat noisy tapi masih ada sinyal
                     elif std < 8.0:                q = std / 8.0 * 0.6
@@ -1233,11 +1307,17 @@ class MuseConnector:
                     )
 
                 _after_jaw  = (_now - self._jaw_cooldown) < 4.0
+                # Snapshot untuk log per-tick: fire di bawah me-reset streak/miss
+                # ke 0, sedangkan log harus menunjukkan nilai yang dipakai memutuskan.
+                _eb_streak_log = self._eyebrow_streak
+                _eb_miss_log   = self._eyebrow_miss
+                _eb_fired_now  = False
                 if (self._eyebrow_streak >= 3 and
                         _cmd_idle and
                         not _after_jaw and
                         self.on_eyebrow_raise and
                         _now - self._eyebrow_cooldown > 3.0):
+                    _eb_fired_now = True
                     self._eyebrow_cooldown = _now
                     self._last_cmd_time    = _now
                     self._eyebrow_streak   = 0
@@ -1248,6 +1328,23 @@ class MuseConnector:
                         self.on_eyebrow_raise()
                     except Exception as _e:
                         print(f"⚠️  on_eyebrow_raise error: {_e}")
+
+                # ── Log detektor per-tick (observasi saja, tidak memengaruhi detektor) ──
+                _det_log.write(
+                    time=datetime.now().strftime('%H:%M:%S.%f')[:-3],
+                    elapsed_s=round(_now - _t0, 2), tick=self._loop_tick,
+                    std_tp9=round(ch_std[0], 1), std_af7=round(ch_std[1], 1),
+                    std_af8=round(ch_std[2], 1), std_tp10=round(ch_std[3], 1),
+                    q_af7=ch_quality[1], q_af8=ch_quality[2],
+                    p2p_af7=_p2p_af7, p2p_af8=_p2p_af8,
+                    thr_eyebrow=round(self._thr_eyebrow, 1), calib_done=int(self._calib_done),
+                    both_strong=int(_both_strong), bilateral=int(_bilateral_eff),
+                    streak=_eb_streak_log, miss=_eb_miss_log,
+                    eb_blocked_jaw=int(_after_jaw_for_eb or _jaw_active_now),
+                    eb_fired=int(_eb_fired_now),
+                    jaw_tp9=_tp_full[9], jaw_tp10=_tp_full[10],
+                    thr_jaw=round(self._thr_jaw, 1),
+                )
 
                 # ══════════════════════════════════════════════════════════════
                 # Mental command playground — 3 modalitas campuran
@@ -1622,6 +1719,7 @@ class MuseConnector:
         # Loop ended — clean up
         self._imu_thread_stop.set()
         _csv_file.close()
+        _det_log.close()
         print(f"📊  Session log disimpan: {_csv_path}")
         err = self._read_err_log()
         if err:
