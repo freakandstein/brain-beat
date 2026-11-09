@@ -30,7 +30,7 @@ function fakeCtx() {
       else { rec.strokes++; rec.lineAlphas.push(ctx.globalAlpha); rec.inkParts.push(ctx.globalAlpha * segs); }
     },
     fill() { if (cur) rec.shapes.push({ op: 'fill', ...cur, style: ctx.fillStyle, alpha: ctx.globalAlpha }); },
-    fillText: (t, x, y) => { chk(x, y); rec.texts.push({ t, x, y, alpha: ctx.globalAlpha }); },
+    fillText: (t, x, y) => { chk(x, y); rec.texts.push({ t, x, y, alpha: ctx.globalAlpha, style: ctx.fillStyle }); },
   };
   return { ctx, rec };
 }
@@ -159,4 +159,29 @@ test('redup saat tidak terhubung: dim < 1 menurunkan terang garis dan titik', ()
   assert.ok(maxAlpha(dim.rec) < maxAlpha(full.rec), 'garis lebih redup');
   const dots = (rec) => Math.max(...rec.shapes.filter((p) => p.op === 'fill' && p.style === COLORS.good).map((p) => p.alpha));
   assert.ok(dots(dim.rec) < dots(full.rec), 'titik lebih redup');
+});
+
+test('palette: warna titik, alas titik, label, cincin off, dan riak mengikuti palette (untuk latar terang); tanpa palette tetap warna gelap lama', () => {
+  const light = { good: '#a10001', weak: '#a10002', poor: '#a10003', off: '#a10004', halo: '#a10005', label: '#a10006', offRing: '#a10007' };
+  const at55 = at(0.55);
+  const find = (rec, op, style, s) => rec.shapes.find((p) => p.op === op && p.style === style && Math.abs(p.x - s.x) < 0.5 && Math.abs(p.y - s.y) < 0.5);
+
+  const themed = draw(at55, { palette: light, pulse: 0.6 });
+  const [tp9, af7, af8, tp10] = themed.stats.sensors;
+  assert.ok(find(themed.rec, 'fill', light.good, tp9), 'good dari palette');
+  assert.ok(find(themed.rec, 'fill', light.weak, af7), 'weak dari palette');
+  assert.ok(find(themed.rec, 'stroke', light.poor, af8), 'cincin poor dari palette');
+  assert.ok(find(themed.rec, 'fill', light.off, tp10), 'off dari palette');
+  assert.ok(find(themed.rec, 'stroke', light.offRing, tp10), 'bingkai off dari palette');
+  for (const s of themed.stats.sensors) assert.ok(find(themed.rec, 'fill', light.halo, s), `alas ${s.name} dari palette`);
+  assert.ok(themed.rec.texts.length > 0 && themed.rec.texts.every((t) => t.style === light.label), 'label dari palette');
+  assert.ok(themed.rec.shapes.some((p) => p.op === 'stroke' && p.r > 0.15 * W && p.style === light.good), 'cincin riak memakai warna good palette');
+
+  const plain = draw(at55, { pulse: 0.6 });
+  const [p0, , p2, p3] = plain.stats.sensors;
+  assert.ok(find(plain.rec, 'fill', COLORS.good, p0), 'default: good lama');
+  assert.ok(find(plain.rec, 'fill', '#021916', p0), 'default: alas gelap lama');
+  assert.ok(find(plain.rec, 'stroke', '#3f7a6e', p3), 'default: bingkai off lama');
+  assert.ok(find(plain.rec, 'stroke', COLORS.poor, p2), 'default: poor lama');
+  assert.ok(plain.rec.texts.every((t) => t.style === '#c9f5ec'), 'default: label lama');
 });

@@ -7,17 +7,37 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script>if (window.obsstudio) document.documentElement.classList.add('in-obs');</script>
 <style>
 :root {
-    --bg:       #050f0e;
-    --bg-deep:  #030908;
-    --panel:    #071916;
-    --card:     #081a17;
-    --border:   #0f2e29;
-    --glow-rim: #0d9488;
-    --text:     #d7f5ee;
-    --dim:      #5f8b83;
-    --accent:   #0a201c;
+    /* Tema terang "kertas" dengan kaca ala macOS (Liquid Glass). Semua warna ada di sini; JS membacanya lewat cssVar(). */
+    color-scheme: light;
+    --text:     #1d2420;
+    --dim:      #48524c;
+
+    --calm:     #2f7a66;
+    --neutral:  #8a6d2f;
+    --tense:    #b5483a;
+    --theta:    #2f7a66;
+    --alpha:    #4f6b82;
+    --beta:     #a4573f;
+    --warn:     #8a6d2f;
+    --bad:      #b5483a;
+    --info:     #3f6586;
+
+    /* Kualitas kontak elektroda: legenda dan titik sensor di peta otak (static/brain3d) memakai nilai yang sama. */
+    --good:     #2f7a66;
+    --weak:     #8a6d2f;
+    --poor:     #b5483a;
+    --off:      #b9bfb9;
+    --brain-ink:      #2c5a4d;
+    --brain-halo:     #f4f2ec;
+    --brain-label:    #1d2420;
+    --brain-off-ring: #8c958f;
+
+    --hairline: 0 0 0 .5px rgba(30,40,35,.10);
+    /* Isi kaca. Di OBS tidak ada yang dikaburkan di belakangnya, jadi isi ini yang menjaga kontras teks di atas scene gelap. */
+    --glass-fill: .5;
 
     --font-organic: 'Outfit', 'Segoe UI', system-ui, -apple-system, sans-serif;
     --font-data:    'JetBrains Mono', 'Courier New', Courier, monospace;
@@ -25,11 +45,10 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Di OBS (browser source) halaman transparan: scene OBS tampil langsung di belakang kaca. Di browser biasa ada latar tipis tanpa
+   hiasan supaya kartu tetap terbaca. window.obsstudio ada di OBS; kelas in-obs dipasang oleh skrip kecil di <head>. */
+html:not(.in-obs) { background: linear-gradient(160deg, #e6e4de 0%, #d3d9d3 55%, #c6cec9 100%) fixed; }
 body {
-    background:
-        radial-gradient(ellipse 90% 60% at 15% 0%, #0d948815, transparent 60%),
-        radial-gradient(ellipse 70% 50% at 100% 100%, #0891b210, transparent 60%),
-        var(--bg);
     color: var(--text);
     font-family: var(--font-organic);
     min-height: 100vh;
@@ -43,18 +62,40 @@ body {
     max-width: 620px;
 }
 
+/* ── Kaca (header + kartu utama) ─────────────────────── */
+/* Blur dan isi kaca ada di ::before (z-index -1) supaya gambar ulang canvas di dalam kartu tidak ikut memicu hitung ulang blur. */
+.header, .main-card {
+    position: relative;
+    isolation: isolate;
+    border: 1px solid rgba(255,255,255,.66);
+    box-shadow: var(--hairline), 0 1px 2px rgba(30,40,35,.08), 0 22px 50px rgba(40,50,45,.18);
+}
+.header::before, .main-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background:
+        linear-gradient(135deg, rgba(255,255,255,.70) 0%, rgba(255,255,255,0) 38%),
+        radial-gradient(ellipse 140% 100% at 50% -10%, var(--mood-glow, transparent), transparent 65%),
+        rgba(255,255,255,var(--glass-fill));
+    -webkit-backdrop-filter: blur(38px) saturate(180%);
+    backdrop-filter: blur(38px) saturate(180%);
+    box-shadow:
+        inset 1.5px 1.5px 0 rgba(255,255,255,.95),
+        inset -1px -1px 0 rgba(255,255,255,.38),
+        inset 0 0 18px rgba(255,255,255,.18);
+}
+
 /* ── Header ─────────────────────────────────────────── */
-.header { padding: 4px 0 8px; }
+.header { padding: 12px 20px; margin-bottom: 14px; border-radius: 22px; }
 .header h1 {
     font-family: var(--font-organic);
-    font-size: 1.5rem;
+    font-size: 1.25rem;
     font-weight: 700;
     letter-spacing: 0.01em;
     color: var(--text);
-    background: linear-gradient(120deg, #5eead4, #2dd4bf 45%, #7dd3fc);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
 }
 .header-bottom {
     display: flex;
@@ -72,7 +113,7 @@ body {
     margin-bottom: 4px;
     font-family: var(--font-data);
     font-size: 0.85rem;
-    color: #6b9c93;
+    color: var(--dim);
     white-space: nowrap;
     transition: color 0.4s;
 }
@@ -88,13 +129,13 @@ body {
 .live-dot {
     width: 7px; height: 7px;
     border-radius: 50%;
-    background: #3f5f58;
+    background: #9aa59f;
     flex-shrink: 0;
     transition: background 0.4s, box-shadow 0.4s;
 }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
 
-/* ── BCI connect button ──────────────────────────────── */
+/* ── BCI connect button + kontrol footer: kapsul kaca ─── */
 .bci-wrap {
     display: flex;
     flex-direction: column;
@@ -104,49 +145,53 @@ body {
 }
 #bci-btn, #mute-btn, #cursor-btn {
     font-family: var(--font-data);
-    font-size: 0.68rem;
+    font-size: 0.7rem;
     font-weight: 700;
-    letter-spacing: 0.04em;
-    padding: 3px 9px;
-    border-radius: 20px;
-    border: 1px solid var(--border);
-    background: var(--accent);
+    letter-spacing: 0.03em;
+    padding: 5px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.8);
+    background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(255,255,255,.68));
     color: var(--dim);
     cursor: pointer;
     transition: all 0.15s;
     white-space: nowrap;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.95), var(--hairline), 0 1px 2px rgba(30,40,35,.10), 0 6px 14px rgba(30,40,35,.08);
 }
-#bci-btn:hover, #mute-btn:hover, #cursor-btn:hover { border-color: var(--text); color: var(--text); }
-#bci-btn.scanning { color: #fbbf75; border-color: #fbbf75; box-shadow: 0 0 10px #fbbf7540; animation: blink 0.9s infinite; }
-#bci-btn.connecting { color: #fbbf75; border-color: #fbbf75; cursor: default; }
+#mute-btn, #cursor-btn {
+    -webkit-backdrop-filter: blur(14px) saturate(180%);
+    backdrop-filter: blur(14px) saturate(180%);
+}
+#bci-btn:hover, #mute-btn:hover, #cursor-btn:hover {
+    color: var(--text);
+    background: linear-gradient(180deg, rgba(255,255,255,.97), rgba(255,255,255,.82));
+}
+#bci-btn.scanning { color: var(--warn); border-color: rgba(138,109,47,.45); background: linear-gradient(180deg, rgba(138,109,47,.20), rgba(138,109,47,.08)), rgba(255,255,255,.74); animation: blink 0.9s infinite; }
+#bci-btn.connecting { color: var(--warn); border-color: rgba(138,109,47,.45); background: linear-gradient(180deg, rgba(138,109,47,.20), rgba(138,109,47,.08)), rgba(255,255,255,.74); cursor: default; }
 #bci-btn.connected {
-    color: #5eead4;
-    border-color: #2dd4bf;
-    background: #0c2b25;
-    box-shadow: 0 0 12px #2dd4bf30;
+    color: var(--calm);
+    border-color: rgba(47,122,102,.45);
+    background: linear-gradient(180deg, rgba(47,122,102,.20), rgba(47,122,102,.08)), rgba(255,255,255,.74);
     cursor: pointer;
 }
-#bci-btn.connected:hover { background: #123a32; }
+#bci-btn.connected:hover { background: linear-gradient(180deg, rgba(47,122,102,.30), rgba(47,122,102,.14)), rgba(255,255,255,.80); }
 #mute-btn.muted {
-    color: #fb7185;
-    border-color: #fb7185;
-    background: #2e161c;
-    box-shadow: 0 0 10px #fb718530;
+    color: var(--bad);
+    border-color: rgba(181,72,58,.45);
+    background: linear-gradient(180deg, rgba(181,72,58,.18), rgba(181,72,58,.07)), rgba(255,255,255,.74);
 }
-#mute-btn.muted:hover { background: #3a1c23; }
+#mute-btn.muted:hover { background: linear-gradient(180deg, rgba(181,72,58,.28), rgba(181,72,58,.12)), rgba(255,255,255,.80); }
 #cursor-btn.active {
-    color: #7dd3fc;
-    border-color: #7dd3fc;
-    background: #0d2530;
-    box-shadow: 0 0 10px #7dd3fc30;
+    color: var(--info);
+    border-color: rgba(63,101,134,.45);
+    background: linear-gradient(180deg, rgba(63,101,134,.20), rgba(63,101,134,.08)), rgba(255,255,255,.74);
     animation: blink 1.4s infinite;
 }
-#cursor-btn.active:hover { background: #123244; }
+#cursor-btn.active:hover { background: linear-gradient(180deg, rgba(63,101,134,.30), rgba(63,101,134,.14)), rgba(255,255,255,.80); }
 .footer-controls {
     display: flex;
     justify-content: flex-start;
-    gap: 6px;
-    margin-top: 10px;
+    gap: 8px;
 }
 #tilt-calib-banner {
     display: none;
@@ -154,16 +199,19 @@ body {
     font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.04em;
-    padding: 5px 10px;
-    border-radius: 8px;
-    border: 1px solid #7dd3fc;
-    background: #0d2530;
-    color: #7dd3fc;
-    box-shadow: 0 0 12px #7dd3fc25;
-    margin-top: 8px;
+    padding: 8px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(63,101,134,.45);
+    background: linear-gradient(180deg, rgba(63,101,134,.18), rgba(63,101,134,.07)), rgba(255,255,255,.80);
+    -webkit-backdrop-filter: blur(14px) saturate(180%);
+    backdrop-filter: blur(14px) saturate(180%);
+    color: var(--info);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.9), var(--hairline), 0 6px 14px rgba(30,40,35,.08);
+    margin-top: 10px;
     animation: blink 1.0s infinite;
 }
 #tilt-calib-banner.show { display: block; }
+.ico { vertical-align: -2px; margin-right: 3px; }
 .bci-device-list {
     display: flex;
     flex-direction: column;
@@ -171,29 +219,16 @@ body {
     gap: 4px;
 }
 
-/* ── Divider ─────────────────────────────────────────── */
-.divider {
-    height: 1px;
-    background: linear-gradient(90deg, transparent, var(--glow-rim) 50%, transparent);
-    opacity: 0.35;
-    margin: 6px 0;
-}
-
 /* ── Main Card ──────────────────────────────────────── */
 .main-card {
-    background:
-        radial-gradient(ellipse 140% 100% at 50% -10%, var(--mood-glow, #2dd4bf00), transparent 65%),
-        var(--card);
-    border: 1px solid var(--border);
-    border-radius: 14px 14px 22px 14px;
-    box-shadow: inset 0 1px 0 #ffffff05;
-    padding: 17px 19px 15px;
-    margin: 7px 0 11px;
-    transition: background 1.2s ease, box-shadow 1.2s ease, border-color 0.2s ease;
+    border-radius: 26px;
+    padding: 20px 22px 18px;
+    margin: 0 0 14px;
+    transition: border-color 0.2s ease, box-shadow 1.2s ease;
 }
 .main-card.mental-flash {
-    border-color: #5eead4;
-    box-shadow: inset 0 1px 0 #ffffff05, 0 0 18px #5eead460;
+    border-color: var(--calm);
+    box-shadow: var(--hairline), 0 0 18px rgba(47,122,102,.45), 0 22px 50px rgba(40,50,45,.18);
 }
 
 /* ── State row ──────────────────────────────────────── */
@@ -202,7 +237,7 @@ body {
     align-items: flex-start;
     justify-content: space-between;
     gap: 11px;
-    margin-bottom: 9px;
+    margin-bottom: 11px;
 }
 .state-row-right {
     display: flex;
@@ -214,16 +249,15 @@ body {
 .hr-badge {
     font-family: var(--font-data);
     font-size: 0.92rem;
-    color: #fb7185;
+    color: var(--bad);
 }
 #state-badge {
     font-family: var(--font-organic);
     font-size: 2.1rem;
     font-weight: 700;
     letter-spacing: 0.06em;
-    color: #5eead4;
-    transition: color 0.5s, text-shadow 0.5s;
-    text-shadow: 0 0 28px #5eead490, 0 0 60px #5eead430;
+    color: var(--calm);
+    transition: color 0.5s;
     min-width: 6.5ch;
     display: block;
     animation: badgeBreathe 3.2s ease-in-out infinite;
@@ -239,47 +273,47 @@ body {
 }
 
 /* ── Spectrum slider ─────────────────────────────────── */
-.spectrum-wrap { margin-bottom: 11px; }
+.spectrum-wrap { margin-bottom: 13px; }
 .spectrum-labels {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 6px;
+    margin-bottom: 7px;
 }
 .spectrum-label {
     font-family: var(--font-data);
     font-size: 0.62rem;
     letter-spacing: 0.08em;
 }
-.spectrum-label.calm  { color: #5eead4; }
-.spectrum-label.neutral { color: #fbbf75; text-align: center; flex: 1; }
-.spectrum-label.tense { color: #e879f9; }
+.spectrum-label.calm  { color: var(--calm); }
+.spectrum-label.neutral { color: var(--neutral); text-align: center; flex: 1; }
+.spectrum-label.tense { color: var(--tense); }
 .spectrum-track {
     position: relative;
-    height: 10px;
-    border-radius: 5px;
-    background: linear-gradient(90deg, #2dd4bf 0%, #fbbf75 50%, #e879f9 100%);
-    box-shadow: 0 0 14px -2px #2dd4bf40, inset 0 1px 2px #0008;
-    margin-bottom: 6px;
+    height: 12px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--calm) 0%, var(--neutral) 50%, var(--tense) 100%);
+    box-shadow: inset 0 1px 3px rgba(0,0,0,.28), 0 .5px 0 rgba(255,255,255,.7);
+    margin-bottom: 7px;
 }
 .spectrum-neutral-zone {
     position: absolute;
-    top: -3px;
+    top: -4px;
     left: 35%;
     width: 30%;
-    height: 16px;
-    border: 1.5px solid #fbbf7580;
-    border-radius: 8px;
+    height: 20px;
+    border: 1.5px solid rgba(138,109,47,.55);
+    border-radius: 11px;
     pointer-events: none;
 }
 .spectrum-cursor {
     position: absolute;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: 14px;
-    height: 14px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
-    background: #f0fdfa;
-    box-shadow: 0 0 10px #5eead4c0, 0 0 0 2px #04241fcc;
+    background: linear-gradient(180deg, #fff, #eef0ee);
+    box-shadow: 0 0 0 .5px rgba(30,40,35,.18), 0 2px 6px rgba(30,40,35,.28), inset 0 1px 0 #fff;
     transition: left 0.18s ease-out;
     pointer-events: none;
 }
@@ -292,12 +326,10 @@ body {
     padding: 0 2px;
 }
 
-
-
 /* ── EEG + Map row ───────────────────────────────────── */
 .eeg-map-row {
     display: flex;
-    gap: 20px;
+    gap: 22px;
     align-items: flex-start;
 }
 .eeg-channels { flex: 1; min-width: 0; }
@@ -308,32 +340,35 @@ body {
     font-size: 0.62rem;
     letter-spacing: 0.13em;
     color: var(--dim);
-    margin-bottom: 6px;
+    margin-bottom: 7px;
 }
 
 /* ── EEG Waveforms ───────────────────────────────────── */
-.channel { margin-bottom: 8px; }
+.channel { margin-bottom: 9px; }
 .channel:last-child { margin-bottom: 0; }
 .channel-header {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    margin-bottom: 4px;
+    margin-bottom: 5px;
 }
 .channel-name {
     font-family: var(--font-data);
     font-size: 0.82rem;
     font-weight: 700;
 }
-.channel-name.alpha { color: #7dd3fc; }
-.channel-name.beta  { color: #e879f9; }
-.channel-name.theta { color: #5eead4; }
-.hz-label { font-size: 0.58rem; font-weight: 400; opacity: 0.55; margin-left: 5px; }
+.channel-name.alpha { color: var(--alpha); }
+.channel-name.beta  { color: var(--beta); }
+.channel-name.theta { color: var(--theta); }
+.hz-label { font-size: 0.58rem; font-weight: 400; opacity: 0.7; margin-left: 5px; }
+/* Sumur kaca: kanvas digambar transparan, jadi latarnya dari CSS. */
 .waveform-canvas {
     width: 100%;
     height: 47px;
     display: block;
-    border-radius: 4px;
+    border-radius: 12px;
+    background: rgba(255,255,255,.20);
+    box-shadow: 0 0 0 1px rgba(255,255,255,.55), inset 0 1px 3px rgba(30,40,35,.10);
 }
 
 /* ── EEG Channel Map ─────────────────────────────────── */
@@ -367,6 +402,9 @@ body {
     border-radius: 50%;
     flex-shrink: 0;
 }
+.head-legend i.good { background: var(--good); }
+.head-legend i.weak { background: var(--weak); }
+.head-legend i.off  { background: var(--off); box-shadow: inset 0 0 0 1px rgba(30,40,35,.18); }
 
 /* ── EEG Channel Map: otak 3D (static/brain3d) ───────── */
 #brain-canvas {
@@ -376,7 +414,7 @@ body {
 }
 .head-legend i.ring {
     background: transparent;
-    box-shadow: inset 0 0 0 2px #fb7185;
+    box-shadow: inset 0 0 0 2px var(--poor);
 }
 
 .bci-device-item {
@@ -384,16 +422,17 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 3px 9px 3px 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(255,255,255,.70));
+    border: 1px solid rgba(255,255,255,.8);
+    border-radius: 12px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.95), var(--hairline);
     padding: 5px 11px 5px 9px;
     font-size: 0.72rem;
     cursor: pointer;
     transition: border-color 0.15s, box-shadow 0.15s;
     white-space: nowrap;
 }
-.bci-device-item:hover { border-color: #2dd4bf; }
+.bci-device-item:hover { border-color: var(--calm); }
 .bci-device-name { color: var(--text); font-weight: 600; font-family: var(--font-data); }
 .bci-device-addr { color: var(--dim); font-family: var(--font-data); font-size: 0.65rem; }
 </style>
@@ -419,8 +458,6 @@ body {
       </div>
     </div>
   </div>
-
-  <div class="divider"></div>
 
   <!-- Main Card: State + Spectrum + EEG + Map -->
   <div class="main-card">
@@ -464,7 +501,7 @@ body {
         <div class="channel">
           <div class="channel-header">
             <span class="channel-name theta">θ &nbsp;theta<span class="hz-label">4–8 Hz</span></span>
-            <span id="theta-val" style="font-family:monospace;font-size:0.75rem;color:#5eead4">—</span>
+            <span id="theta-val" style="font-family:monospace;font-size:0.75rem;color:var(--theta)">—</span>
           </div>
           <canvas id="theta-wave" class="waveform-canvas"></canvas>
         </div>
@@ -472,7 +509,7 @@ body {
         <div class="channel">
           <div class="channel-header">
             <span class="channel-name alpha">α &nbsp;alpha<span class="hz-label">8–13 Hz</span></span>
-            <span id="alpha-val" style="font-family:monospace;font-size:0.75rem;color:#7dd3fc">—</span>
+            <span id="alpha-val" style="font-family:monospace;font-size:0.75rem;color:var(--alpha)">—</span>
           </div>
           <canvas id="alpha-wave" class="waveform-canvas"></canvas>
         </div>
@@ -480,7 +517,7 @@ body {
         <div class="channel">
           <div class="channel-header">
             <span class="channel-name beta">β &nbsp;beta<span class="hz-label">13–25 Hz</span></span>
-            <span id="beta-val" style="font-family:monospace;font-size:0.75rem;color:#e879f9">—</span>
+            <span id="beta-val" style="font-family:monospace;font-size:0.75rem;color:var(--beta)">—</span>
           </div>
           <canvas id="beta-wave" class="waveform-canvas"></canvas>
         </div>
@@ -491,10 +528,10 @@ body {
         <span class="sq-label">EEG CHANNEL MAP</span>
         <canvas id="brain-canvas" width="190" height="155" aria-label="EEG channel map: 3D brain with the four Muse electrodes"></canvas>
         <div class="head-legend">
-          <span><i style="background:#5eead4"></i>Good</span>
-          <span><i style="background:#fbbf75"></i>Weak</span>
+          <span><i class="good"></i>Good</span>
+          <span><i class="weak"></i>Weak</span>
           <span><i class="ring"></i>Poor</span>
-          <span><i style="background:#1c3b35"></i>Off</span>
+          <span><i class="off"></i>Off</span>
         </div>
       </div>
 
@@ -515,29 +552,37 @@ body {
 <script>
 // ── Socket.IO ──────────────────────────────────────────────────────────────
 const socket = io();
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 socket.on('connect', () => {
   const dot = document.getElementById('live-dot');
-  dot.style.background = '#5eead4';
-  dot.style.boxShadow  = '0 0 8px #5eead490';
+  dot.style.background = cssVar('--calm');
+  dot.style.boxShadow  = '0 0 6px ' + cssVar('--calm') + '80';
   dot.style.animation  = 'blink 1.8s ease-in-out infinite';
 });
 
 socket.on('disconnect', () => {
   const dot = document.getElementById('live-dot');
-  dot.style.background = '#fb7185';
-  dot.style.boxShadow  = '0 0 8px #fb718590';
+  dot.style.background = cssVar('--bad');
+  dot.style.boxShadow  = '0 0 6px ' + cssVar('--bad') + '80';
   dot.style.animation  = 'none';
 });
 
 // ── Mute ───────────────────────────────────────────────────────────────────
 let isMuted = false;
 
+// Ikon garis (mengikuti warna teks tombol). Emoji mouse berwarna putih dan hilang di atas kaca terang.
+const svgIcon = (paths) => `<svg class="ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ICON_SPEAKER = svgIcon('<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/><path d="M19 6a8.5 8.5 0 0 1 0 12"/>');
+const ICON_MUTED   = svgIcon('<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9l5 6M22 9l-5 6"/>');
+const ICON_MOUSE   = svgIcon('<rect x="7" y="3" width="10" height="18" rx="5"/><path d="M12 7v4"/>');
+
 function renderMuteBtn() {
   const btn = document.getElementById('mute-btn');
-  btn.innerHTML = isMuted ? '&#x1F507; Unmute' : '&#x1F50A; Mute';
+  btn.innerHTML = isMuted ? ICON_MUTED + ' Unmute' : ICON_SPEAKER + ' Mute';
   btn.classList.toggle('muted', isMuted);
 }
+renderMuteBtn();
 
 function muteBtnClick() {
   socket.emit('set_mute', { muted: !isMuted });
@@ -557,7 +602,7 @@ socket.on('connect', () => socket.emit('get_mute'));
 // bukan delay tetap — durasi variabel, biasanya <1s per tahap. Tombol
 // menampilkan instruksi sesuai cursor_calib_phase yang di-broadcast server.
 const CALIB_INSTRUCTIONS = {
-  idle:    '&#x1F5B1; Cursor: OFF',
+  idle:    ICON_MOUSE + ' Cursor: OFF',
   neutral: '&#x23F3; Tahan kepala diam...',
   right:   '&#x27A1;&#xFE0F; Tilt kepala ke KANAN, tahan...',
   up:      '&#x2B06;&#xFE0F; Tilt kepala ke ATAS, tahan...',
@@ -572,6 +617,7 @@ function renderCursorBtn() {
   btn.innerHTML = CALIB_INSTRUCTIONS[cursorCalibPhase] || CALIB_INSTRUCTIONS.idle;
   btn.classList.toggle('active', cursorCalibPhase !== 'idle');
 }
+renderCursorBtn();
 
 function cursorBtnClick() {
   socket.emit('set_cursor_control', { enabled: !cursorControlEnabled });
@@ -621,19 +667,18 @@ socket.on('state_update', (d) => {
 
   let displayState, color, desc;
   if (sp > 0.65) {
-    displayState = 'TENSE'; color = '#e879f9'; desc = 'Tense / Aroused';
+    displayState = 'TENSE'; color = cssVar('--tense'); desc = 'Tense / Aroused';
   } else if (sp >= 0.35) {
-    displayState = 'NEUTRAL'; color = '#fbbf75'; desc = 'Neutral / Near baseline';
+    displayState = 'NEUTRAL'; color = cssVar('--neutral'); desc = 'Neutral / Near baseline';
   } else {
-    displayState = 'CALM';  color = '#5eead4'; desc = 'Calm / Relaxed';
+    displayState = 'CALM';  color = cssVar('--calm'); desc = 'Calm / Relaxed';
   }
   const badge = document.getElementById('state-badge');
   badge.textContent = displayState;
   badge.style.color = color;
-  badge.style.textShadow = `0 0 28px ${color}90, 0 0 60px ${color}30`;
   badge.style.animationDuration = displayState === 'TENSE' ? '1.4s' : displayState === 'NEUTRAL' ? '2.2s' : '3.2s';
   document.getElementById('state-desc').textContent = desc;
-  document.querySelector('.main-card').style.setProperty('--mood-glow', color + '22');
+  document.querySelector('.main-card').style.setProperty('--mood-glow', color + '1a');
 
   document.getElementById('spectrum-cursor').style.left = (sp * 100) + '%';
   document.getElementById('hr-val').textContent = d.heart_rate ? d.heart_rate + ' bpm' : '—';
@@ -641,11 +686,11 @@ socket.on('state_update', (d) => {
   if (typeof d.battery_percent === 'number') {
     const bp = d.battery_percent;
     document.getElementById('battery-val').textContent = Math.round(bp) + '%';
-    const battColor = bp <= 15 ? '#fb7185' : bp <= 30 ? '#fbbf75' : '#5eead4';
+    const battColor = bp <= 15 ? cssVar('--bad') : bp <= 30 ? cssVar('--warn') : cssVar('--calm');
     document.getElementById('battery-badge').style.color = battColor;
   } else {
     document.getElementById('battery-val').textContent = '—';
-    document.getElementById('battery-badge').style.color = '#6b9c93';
+    document.getElementById('battery-badge').style.color = cssVar('--dim');
   }
 
   function toDb(v) { return 10 * Math.log10(Math.max(v, 1e-10)); }
@@ -730,7 +775,7 @@ socket.on('muse_scan_result', (d) => {
   btn.className   = '';
   btn.textContent = '🔍 Connect';
   if (d.error) {
-    list.innerHTML = `<div style="font-size:0.68rem;color:#fb7185;text-align:right">${d.error}</div>`;
+    list.innerHTML = `<div style="font-size:0.68rem;color:var(--bad);text-align:right">${d.error}</div>`;
     return;
   }
   if (!d.devices || d.devices.length === 0) {
@@ -809,9 +854,7 @@ class Waveform {
   draw() {
     const ctx = this.ctx, W = this._dw, H = this._dh;
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = '#0a201c';
-    ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.strokeStyle = 'rgba(30,40,35,0.10)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, H * 0.5); ctx.lineTo(W, H * 0.5); ctx.stroke();
     if (this.buf.length < 2) return;
@@ -843,14 +886,21 @@ class Waveform {
 
 const waves = {};
 document.addEventListener('DOMContentLoaded', () => {
-  waves.theta = new Waveform('theta-wave', '#5eead4');
-  waves.alpha = new Waveform('alpha-wave', '#7dd3fc');
-  waves.beta  = new Waveform('beta-wave',  '#e879f9');
+  waves.theta = new Waveform('theta-wave', cssVar('--theta'));
+  waves.alpha = new Waveform('alpha-wave', cssVar('--alpha'));
+  waves.beta  = new Waveform('beta-wave',  cssVar('--beta'));
 });
 </script>
 <script type="module">
   import { createBrainView } from '/static/brain3d/brain-view.js';
-  window.brainView = createBrainView(document.getElementById('brain-canvas'));
+  // Warna dari :root supaya titik sensor di peta sama dengan legenda; latar terang, jadi tinta dan palette-nya gelap.
+  window.brainView = createBrainView(document.getElementById('brain-canvas'), {
+    ink: cssVar('--brain-ink'),
+    palette: {
+      good: cssVar('--good'), weak: cssVar('--weak'), poor: cssVar('--poor'), off: cssVar('--off'),
+      halo: cssVar('--brain-halo'), label: cssVar('--brain-label'), offRing: cssVar('--brain-off-ring'),
+    },
+  });
   window.brainView.setContact(_lastContact.quality, _lastContact.connected);
 </script>
 </body>

@@ -21,6 +21,9 @@ const GOOD_AT = 0.7; // ambang kualitas kanal: sama dengan peta SVG yang diganti
 const WEAK_AT = 0.35;
 const YAW0 = 0.55;
 const INK = '#8fe9d8';
+// Warna titik sensor dan teksnya. DARK = untuk latar gelap (bawaan); latar terang memberi palette sendiri lewat opsi `palette`.
+// good/weak/poor/off = isi titik per level, halo = alas di bawah titik, label = nama sensor, offRing = bingkai titik off.
+export const DARK = { ...COLORS, halo: '#021916', label: '#c9f5ec', offRing: '#3f7a6e' };
 const DIM_OFF = 0.55; // otak lebih redup saat Muse belum terhubung
 const PULSE_S = 0.9; // lama riak mental command
 
@@ -139,7 +142,7 @@ export function stepBrain(b, dt) {
   project(b);
 }
 
-// Gambar satu frame ke ctx 2D. o: { width, height (px CSS), levels (empat level sensor), dim (1 = penuh), pulse (0..1, riak), ink, labels }.
+// Gambar satu frame ke ctx 2D. o: { width, height (px CSS), levels (empat level sensor), dim (1 = penuh), pulse (0..1, riak), ink, palette (sebagian dari DARK), labels }.
 // Mengembalikan { drawn, sensors: [{ name, level, face, x, y }] } untuk tes dan diagnostik.
 export function drawBrain(ctx, b, o) {
   const W = o.width;
@@ -147,6 +150,7 @@ export function drawBrain(ctx, b, o) {
   const dim = o.dim ?? 1;
   const pulse = o.pulse ?? 0;
   const ink = o.ink ?? INK;
+  const pal = { ...DARK, ...o.palette };
   const levels = o.levels ?? sensorLevels(null, false);
   const k = Math.min(W, H) / 155; // skala UI: 1 pada tinggi kanvas 155 px
   const sc = Math.min(W / b.data.w, H / b.data.h) * FIT;
@@ -211,7 +215,7 @@ export function drawBrain(ctx, b, o) {
   if (pulse > 0) { // riak mental command: cincin yang melebar dari tengah dan memudar
     const e = 1 - (1 - (1 - pulse)) ** 2;
     ctx.globalAlpha = pulse * 0.9;
-    ctx.strokeStyle = COLORS.good;
+    ctx.strokeStyle = pal.good;
     ctx.lineWidth = 0.5 + 2 * pulse * k;
     ctx.beginPath();
     ctx.arc(W / 2, H / 2, (0.05 + 0.42 * e) * W, 0, TAU);
@@ -230,20 +234,20 @@ export function drawBrain(ctx, b, o) {
     const a = (0.6 + 0.4 * face) * (0.5 + 0.5 * dim);
     const level = levels[j];
     ctx.globalAlpha = a * 0.6; // alas gelap supaya titik terbaca di atas garis
-    ctx.fillStyle = '#021916';
+    ctx.fillStyle = pal.halo;
     ctx.beginPath(); ctx.arc(x, y, r + 2 * k, 0, TAU); ctx.fill();
     ctx.globalAlpha = a;
     ctx.beginPath(); ctx.arc(x, y, r, 0, TAU);
-    if (level === 'poor') { ctx.strokeStyle = COLORS.poor; ctx.lineWidth = Math.max(1.5, r * 0.34); ctx.stroke(); }
+    if (level === 'poor') { ctx.strokeStyle = pal.poor; ctx.lineWidth = Math.max(1.5, r * 0.34); ctx.stroke(); }
     else {
-      ctx.fillStyle = COLORS[level];
+      ctx.fillStyle = pal[level];
       ctx.fill();
-      if (level === 'off') { ctx.strokeStyle = '#3f7a6e'; ctx.lineWidth = 1; ctx.stroke(); }
+      if (level === 'off') { ctx.strokeStyle = pal.offRing; ctx.lineWidth = 1; ctx.stroke(); }
     }
     if (o.labels !== false && face >= 0.5) { // label hanya di sisi dekat; di sisi jauh titiknya berpindah-pindah sehingga label hanya mengganggu
       const right = x < W * 0.62;
       ctx.globalAlpha = a * 0.95;
-      ctx.fillStyle = '#c9f5ec';
+      ctx.fillStyle = pal.label;
       ctx.font = `${(8 * k).toFixed(1)}px ui-monospace, Menlo, monospace`;
       ctx.textAlign = right ? 'left' : 'right';
       ctx.textBaseline = 'middle';
@@ -257,7 +261,7 @@ export function drawBrain(ctx, b, o) {
 
 // Perekat ke <canvas>: loop requestAnimationFrame (dibatasi fps), ukuran piksel mengikuti ukuran CSS dan devicePixelRatio.
 // setContact(quality, connected) dipanggil tiap state_update; pulse() dari riak mental command; stats() untuk diagnostik.
-export function createBrainView(canvas, { fps = 30, ink = INK } = {}) {
+export function createBrainView(canvas, { fps = 30, ink = INK, palette } = {}) {
   const ctx = canvas.getContext('2d');
   const brain = createBrain();
   let levels = sensorLevels(null, false);
@@ -291,7 +295,7 @@ export function createBrainView(canvas, { fps = 30, ink = INK } = {}) {
     stepBrain(brain, dt);
     pulse = Math.max(0, pulse - dt / PULSE_S);
     ctx.clearRect(0, 0, cssW, cssH);
-    stats = drawBrain(ctx, brain, { width: cssW, height: cssH, levels, dim, pulse, ink });
+    stats = drawBrain(ctx, brain, { width: cssW, height: cssH, levels, dim, pulse, ink, palette });
   }
   raf = requestAnimationFrame(frame);
 

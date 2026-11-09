@@ -410,14 +410,16 @@ The browser UI (`templates/index.html`) is a single consolidated card layout.
 - **Mental command trigger:** appears below HR for 2.5 seconds when a brain signal fires — e.g. `Scene 1 by brain signal` (green). Hidden when idle. Also fires a ripple on the brain map (Channel Map): the brain's lines flash briefly and a ring expands outward from its center
 - **Spectrum slider:** CALM ↔ NEUTRAL ZONE ↔ TENSE gradient with cursor tracking `spectrum_pos`
 - **EEG Channels + Channel Map (side by side):**
-  - Left: 3 rolling waveform canvases θ → α → β, colors: theta=green, alpha=blue, beta=purple; Hz centroid label per band
-  - Right: a slowly rotating 3D brain drawn from thin lines (`static/brain3d/`, ported from TypeWave; about 20 s per turn, lines farther away fade) with the TP9/AF7/AF8/TP10 electrodes as dots on its surface. Dot = signal quality: Good (≥ 0.7) green, Weak (≥ 0.35) yellow, Poor red ring, Off dark when the Muse is not connected (the brain also dims). Channel labels are shown only for dots on the near side, because the brain rotates
+  - Left: 3 rolling waveform canvases θ → α → β, colors: theta=green, alpha=slate blue, beta=terracotta; Hz centroid label per band
+  - Right: a slowly rotating 3D brain drawn from thin lines (`static/brain3d/`, ported from TypeWave; about 20 s per turn, lines farther away fade) with the TP9/AF7/AF8/TP10 electrodes as dots on its surface. Dot = signal quality: Good (≥ 0.7) green, Weak (≥ 0.35) ochre, Poor red ring, Off light grey when the Muse is not connected (the brain also dims). Channel labels are shown only for dots on the near side, because the brain rotates
   - Dot positions are approximate (the surface fold nearest to each sensor's direction), not anatomically exact. It is a contact indicator, not a map of brain activity
 
 **BCI Device Panel** (below main card)
 - Muse 2 connection status, scan + connect/disconnect buttons
 - Socket live-dot (header): grey=idle, green=connected, red=disconnected
 - Auto-reconnect with backoff (3s → 5s → 10s → 15s); UI shows `🔄 Reconnecting...` during retries
+**Look:** light theme only (it is also used as an OBS browser source), styled as macOS-style "liquid glass": the header and main card are translucent panels with a bright specular edge, and the buttons are glass capsules. In OBS the page background is fully transparent, so the OBS scene shows directly behind the glass (the template adds an `in-obs` class when `window.obsstudio` exists; in a normal browser it gets a plain soft background so the cards stay readable). `backdrop-filter` only blurs the page's own content, never OBS layers behind a browser source, so in OBS the glass is translucent but not frosted; real blur of the scene would have to come from an OBS filter. Because nothing is blurred behind it, the glass is fairly dense (`--glass-fill` in `:root`, default .5) so dark text stays readable over a dark scene; lower it for more see-through, raise it for more contrast. All colours live in `:root` of the template (`--calm`, `--neutral`, `--tense`, `--theta`/`--alpha`/`--beta`, `--good`/`--weak`/`--poor`/`--off`, `--brain-*`); the waveform, state colours and the 3D brain read them through `cssVar()`, so the legend and the brain dots stay in sync. `createBrainView` takes `ink` and `palette` options for this; without them it keeps the original dark-background colours.
+
 
 **Mute button** (header, next to Connect)
 - Toggles the drum engine's output via `set_mute`/`get_mute` socket events — `eeg_engine.py`'s `set_muted()` sets MIDI CC7 (channel volume) to 0 (muted) or 127 (unmuted) on the drum channel, without stopping/restarting FluidSynth

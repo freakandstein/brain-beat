@@ -194,7 +194,7 @@ The UI shows an orange dot and `🔄 Reconnecting...`. Manual disconnect cancels
 - **HR** — heart rate from Muse 2 PPG, top-right of state row
 - **Mental command trigger** — appears below HR for 2.5s when a brain signal fires: `Scene 1 by brain signal` (green). Hidden when idle.
 - **Spectrum slider** — cursor tracks `spectrum_pos` (0=calm → 1=tense) across gradient bar
-- **EEG Channel Map** — slowly rotating 3D brain (lines fade with depth) with the four Muse electrodes on its surface; dot color = signal quality (green / yellow / red ring / dark when disconnected), and the brain flashes on a mental command
+- **EEG Channel Map** — slowly rotating 3D brain (lines fade with depth) with the four Muse electrodes on its surface; dot color = signal quality (green / ochre / red ring / grey when disconnected), and the brain flashes on a mental command
 - **Waveform** — rolling θ/α/β canvas with spectral centroid Hz per band
 - **Reconnecting dot** — orange pulsing dot when auto-reconnect is in progress
 - **Footer controls** (below the main card) — **Mute** button (toggles drum output via MIDI CC7 channel volume) and **Cursor Control** button (toggles head-tilt cursor mode, walks through calibration instructions in-place: "hold still" → "tilt right" → "tilt up" → "Cursor: ON", blinking blue while active)
